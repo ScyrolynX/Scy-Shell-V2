@@ -1,0 +1,2927 @@
+import QtQuick
+import Quickshell
+import Quickshell.Io
+pragma Singleton
+
+Singleton {
+    id: root
+
+    property bool loaded: false
+
+
+    property bool debugRegions: false
+
+    IpcHandler {
+        target: "debug"
+
+        function toggle(): void {
+            root.debugRegions = !root.debugRegions;
+        }
+
+        function on(): void {
+            root.debugRegions = true;
+        }
+
+        function off(): void {
+            root.debugRegions = false;
+        }
+
+    }
+
+    readonly property bool barNotch: root.barStyle === "notch"
+    readonly property bool barFull: root.barStyle === "full"
+    // the bar is drawn as a top bar and mirrored onto the bottom edge
+    readonly property bool barBottom: (root.barShownPosition !== "" ? root.barShownPosition : root.barPosition) === "bottom"
+    // the edge the bar is drawn on lags the one asked for: on a change the bar
+    // slides out of the old edge, moves while out of sight, and slides in at the new
+    property string barShownPosition: ""
+    readonly property bool barRelocating: root.barShownPosition !== "" && root.barShownPosition !== root.barPosition
+
+    onBarRelocatingChanged: {
+        if (root.barRelocating)
+            barMoveTimer.restart();
+
+    }
+
+    Timer {
+        id: barMoveTimer
+
+        interval: Theme.durLong
+        onTriggered: root.barShownPosition = root.barPosition
+    }
+    // a bottom bar that keeps its strip: what would sit flush on that edge floats above it
+    readonly property bool barHoldsBottom: root.barBottom && root.barEnabled && !root.barAutoHide
+    // the bottom edge belongs to the bar while it is there: the dock steps aside, and
+    // comes back when the bar goes to the top
+    readonly property bool dockOn: ScyBridge.owns("dock") && root.dockEnabled && !(root.barBottom && root.barEnabled)
+    // and its switch goes with it: off as the bar moves down, on again as the bar
+    // leaves, when it was the bar that switched it off
+    readonly property bool barTakesDockEdge: root.barPosition === "bottom" && root.barEnabled
+
+    // after the rest of a reload has landed, or its later keys undo this
+    onBarTakesDockEdgeChanged: Qt.callLater(root.syncDockAside)
+    onLoadedChanged: Qt.callLater(root.syncDockAside)
+
+    function syncDockAside() {
+        if (!root.loaded)
+            return ;
+
+        if (root.barTakesDockEdge && root.dockEnabled) {
+            root.dockAsideForBar = true;
+            root.dockEnabled = false;
+        } else if (!root.barTakesDockEdge && root.dockAsideForBar) {
+            root.dockAsideForBar = false;
+            root.dockEnabled = true;
+        }
+    }
+
+    // a surface switch that cannot be turned on as things stand
+    function surfaceLocked(key) {
+        return key === "dockEnabled" && root.barTakesDockEdge;
+    }
+    // notches and the full bar both sit flush against the top edge
+    readonly property bool barFlush: root.barNotch || root.barFull
+    readonly property bool dockNotch: root.dockStyle === "notch"
+    // the launcher, the pins and the running apps each on an island of their own
+    readonly property bool dockSplit: root.dockStyle === "split"
+    readonly property int barPillRadius: Math.min(Theme.rad(18), Math.round(Theme.pill(Theme.dp(root.barHeight))))
+    readonly property int effectiveBarTopMargin: root.barFlush ? 0 : Theme.dp(root.barTopMargin)
+    readonly property int effectiveDockBottomMargin: root.dockNotch ? 0 : Theme.dp(root.dockBottomMargin)
+    // concentric with the dock: its corner less the 10dp from its edge to an item,
+    // so a hover, a drop slot or a tile follows the curve it sits in
+    readonly property int dockItemRadius: Math.max(Theme.dp(4), Math.min(Theme.rad(root.dockRadius), Math.round(Theme.pill(Theme.dp(root.dockIconSize) + Theme.dp(20)))) - Theme.dp(10))
+    readonly property int dockIconInset: Math.max(0, Math.min(Theme.dp(root.dockIconPadding), Math.floor(Theme.dp(root.dockIconSize) / 2) - Theme.dp(6)))
+    // the bar's layout reads through these: the groups in barLayout, keeping
+    // only the modules switched on. the names are the zones' from before the
+    // bar page's arrangement editor, so the bar itself needn't know the difference
+    readonly property var barZones: ["left", "centre", "right"]
+    readonly property var barLayoutKeys: ["barLayout", "barJoins", "barJoinDividers"]
+
+    function barModuleAt(key) {
+        return root.barModuleById[key] || null;
+    }
+
+    function barShown(id) {
+        const m = root.barModuleById[id];
+        return !!m && root[m.key] === true;
+    }
+
+    readonly property var barLeftKeys: root.barLayoutGroups.left.filter((id) => {
+        return root.barShown(id);
+    })
+    readonly property var barCentreKeys: root.barLayoutGroups.center.filter((id) => {
+        return root.barShown(id);
+    })
+    readonly property var barRightKeys: root.barLayoutGroups.right.filter((id) => {
+        return root.barShown(id);
+    })
+
+    function barKeysOf(zone) {
+        return zone === "left" ? root.barLeftKeys : (zone === "centre" ? root.barCentreKeys : root.barRightKeys);
+    }
+
+    function barZoneOf(key) {
+        for (var i = 0; i < root.barZones.length; i++) {
+            if (root.barKeysOf(root.barZones[i]).indexOf(key) >= 0)
+                return root.barZones[i];
+
+        }
+        return "";
+    }
+
+    function barHas(key) {
+        return root.barZoneOf(key) !== "";
+    }
+
+    // switching a module on or off; one going off keeps its slot until its
+    // pill has emptied, so the neighbours close the gap at the rate it shrinks
+    function setBarModuleShown(id, v) {
+        const m = root.barModuleById[id];
+        if (!m || (root[m.key] === true) === v)
+            return ;
+
+        const zone = root.barZoneOf(id);
+        if (!v && zone !== "")
+            root.barRetiring = ({ "key": id, "zone": zone, "at": root.barKeysOf(zone).indexOf(id) });
+
+        root[m.key] = v;
+    }
+
+    readonly property var barPlacedKeys: root.barLeftKeys.concat(root.barCentreKeys, root.barRightKeys)
+
+    function barSignature(keys) {
+        return keys.slice().sort().join(",");
+    }
+
+    // bumped just before an arrangement change that only moves modules about,
+    // so the bar can ease the pills across. switching one on or off is
+    // deliberately not bumped: that animates the pill's own width, and every
+    // neighbour's x already follows that frame by frame
+    property int barReorderTick: 0
+
+    // the module that has just left the bar, and the slot it had. the bar draws
+    // it there until its pill has emptied, so the neighbours close the gap at
+    // the rate it shrinks instead of dropping into it
+    property var barRetiring: null
+
+    function barClearRetiring() {
+        root.barRetiring = null;
+    }
+
+    // every tile the system panel's grid can carry, Lucid's and the user's
+    // own. the panel shows the ones named in systemTiles, in that order, and
+    // the shelf on its card offers the rest
+    readonly property var systemTileCatalog: root.systemTileBuiltins.concat(root.systemOwnTileList.map((t) => {
+        return {
+            "key": t.key,
+            "icon": t.icon,
+            "name": t.name,
+            "own": true
+        };
+    }))
+    readonly property var systemTileBuiltins: [
+        { "key": "wifi", "icon": "wifi", "name": "Wi-Fi" },
+        { "key": "bluetooth", "icon": "bluetooth", "name": "Bluetooth" },
+        { "key": "dnd", "icon": "do_not_disturb_on", "name": "Silence" },
+        { "key": "awake", "icon": "coffee", "name": "Awake" },
+        { "key": "dark", "icon": "dark_mode", "name": "Dark" },
+        { "key": "airplane", "icon": "flight", "name": "Airplane" },
+        { "key": "location", "icon": "location_on", "name": "Location" },
+        { "key": "mic", "icon": "mic", "name": "Mic" },
+        { "key": "capture", "icon": "screenshot_region", "name": "Capture" },
+        { "key": "record", "icon": "screen_record", "name": "Record" },
+        { "key": "picker", "icon": "colorize", "name": "Picker" },
+        { "key": "keyboard", "icon": "keyboard", "name": "Keyboard" },
+        { "key": "timer", "icon": "timer", "name": "Timer" },
+        { "key": "session", "icon": "power_settings_new", "name": "Session" },
+        { "key": "profile", "icon": "speed", "name": "Power" },
+        { "key": "gamemode", "icon": "sports_esports", "name": "Game" },
+        { "key": "nightlight", "icon": "nightlight", "name": "Night light" },
+        { "key": "sound", "icon": "volume_up", "name": "Sound" },
+        { "key": "vpn", "icon": "vpn_key", "name": "VPN" },
+        { "key": "dock", "icon": "dock_to_bottom", "name": "Dock" },
+        { "key": "clipboard", "icon": "content_paste", "name": "Clipboard" },
+        { "key": "emoji", "icon": "mood", "name": "Emoji" },
+        { "key": "wallpaper", "icon": "wallpaper", "name": "Wallpaper" },
+        { "key": "theme", "icon": "palette", "name": "Theme" },
+        { "key": "widgets", "icon": "widgets", "name": "Widgets" },
+        { "key": "lock", "icon": "lock", "name": "Lock" },
+        { "key": "screenshot", "icon": "screenshot_monitor", "name": "Screen" },
+        { "key": "ocr", "icon": "document_scanner", "name": "Scan text" },
+        { "key": "overview", "icon": "grid_view", "name": "Overview" },
+        { "key": "scratchpad", "icon": "stacks", "name": "Scratch" },
+        { "key": "stopwatch", "icon": "av_timer", "name": "Stopwatch" },
+        { "key": "phone", "icon": "phonelink_ring", "name": "Phone" },
+        { "key": "keybinds", "icon": "keyboard_command_key", "name": "Shortcuts" },
+        { "key": "settings", "icon": "settings", "name": "Settings" },
+        { "key": "clear", "icon": "clear_all", "name": "Clear" }
+    ]
+
+    // the user's own tiles, each keyed "own<id>". one with a command to turn
+    // it off is a switch, kept in step by the status command (exit 0 is on)
+    // where there is one; one with only the first is a button that runs it
+    readonly property var systemOwnTileList: {
+        let v = [];
+        try {
+            v = JSON.parse(root.systemOwnTiles || "[]");
+        } catch (e) {
+        }
+        return (Array.isArray(v) ? v : []).filter((t) => {
+            return t && Number(t.id) > 0;
+        }).map((t) => {
+            return {
+                "key": "own" + Math.round(Number(t.id)),
+                "id": Math.round(Number(t.id)),
+                "name": String(t.name || "").trim() || I18n.tr("My tile"),
+                "icon": String(t.icon || "").trim() || "star",
+                "on": String(t.on || ""),
+                "off": String(t.off || ""),
+                "status": String(t.status || "")
+            };
+        });
+    }
+
+    function systemOwnTile(key) {
+        return root.systemOwnTileList.find((t) => {
+            return t.key === key;
+        }) || null;
+    }
+
+    function setSystemOwnTiles(list) {
+        root.systemOwnTiles = list.length === 0 ? "" : JSON.stringify(list.map((t) => {
+            return {
+                "id": t.id,
+                "name": t.name,
+                "icon": t.icon,
+                "on": t.on,
+                "off": t.off,
+                "status": t.status
+            };
+        }));
+    }
+
+    // a new one goes straight onto the panel, with the small tiles
+    function addSystemOwnTile() {
+        const id = root.systemOwnTileList.reduce((n, t) => {
+            return Math.max(n, t.id);
+        }, 0) + 1;
+        root.setSystemOwnTiles(root.systemOwnTileList.concat([{
+            "id": id,
+            "name": I18n.tr("My tile"),
+            "icon": "star",
+            "on": "",
+            "off": "",
+            "status": ""
+        }]));
+        root.setSystemTiles(root.systemTileKeys.concat(["own" + id]));
+        return "own" + id;
+    }
+
+    function setSystemOwnTile(key, fields) {
+        root.setSystemOwnTiles(root.systemOwnTileList.map((t) => {
+            return t.key === key ? Object.assign({}, t, fields) : t;
+        }));
+    }
+
+    function removeSystemOwnTile(key) {
+        if (root.systemTileKeys.indexOf(key) !== -1)
+            root.setSystemTiles(root.systemTileKeys.filter((k) => {
+                return k !== key;
+            }));
+
+        root.setSystemOwnTiles(root.systemOwnTileList.filter((t) => {
+            return t.key !== key;
+        }));
+    }
+
+    function systemTileAt(key) {
+        for (var i = 0; i < root.systemTileCatalog.length; i++) {
+            if (root.systemTileCatalog[i].key === key)
+                return root.systemTileCatalog[i];
+
+        }
+        return null;
+    }
+
+    // same rules as the bar zones: no repeats, nothing the catalogue lacks.
+    // Wi-Fi and Bluetooth sat above the grid before they were tiles of it, so
+    // until the tiles are edited they lead it and a list saved before keeps them
+    readonly property var systemTileKeys: (root.systemTilesRadios ? [] : ["wifi", "bluetooth"]).concat(String(root.systemTiles).split(",").map((x) => {
+        return x.trim();
+    })).filter((x, i, all) => {
+        return x !== "" && all.indexOf(x) === i && root.systemTileAt(x) !== null;
+    })
+    readonly property var systemTileSpare: root.systemTileCatalog.filter((t) => {
+        return root.systemTileKeys.indexOf(t.key) < 0;
+    }).map((t) => {
+        return t.key;
+    })
+
+    function setSystemTiles(keys) {
+        root.systemTiles = keys.join(",");
+        root.systemTilesRadios = true;
+    }
+
+    // a big tile takes half a row, with its name and what it is doing. the
+    // big ones and the small ones are blocks of their own, each in the order
+    // systemTiles keeps
+    readonly property var systemBigKeys: root.prefList(root.systemBigTiles, root.systemTileCatalog)
+    readonly property var systemBigTileKeys: root.systemTileKeys.filter((k) => {
+        return root.systemBigKeys.indexOf(k) !== -1;
+    })
+    readonly property var systemSmallTileKeys: root.systemTileKeys.filter((k) => {
+        return root.systemBigKeys.indexOf(k) === -1;
+    })
+
+    // both tile blocks at once: which are big, and the order of each
+    function setSystemTileBlocks(big, small) {
+        root.systemBigTiles = big.join(",");
+        root.setSystemTiles(big.concat(small));
+    }
+
+    function setTileBig(key, big) {
+        const l = root.systemBigKeys.filter((k) => {
+            return k !== key;
+        });
+        if (big)
+            l.push(key);
+
+        root.systemBigTiles = l.join(",");
+    }
+
+    // the control centre's blocks, and what the sliders and gauges hold; the
+    // tile blocks hold the tiles above
+    readonly property var systemBlockCatalog: [
+        { "key": "sliders", "icon": "tune", "name": "Sliders" },
+        { "key": "bigtiles", "icon": "dashboard", "name": "Big tiles" },
+        { "key": "tiles", "icon": "apps", "name": "Tiles" },
+        { "key": "media", "icon": "music_note", "name": "Media" },
+        { "key": "gauges", "icon": "speed", "name": "Gauges" },
+        { "key": "weather", "icon": "partly_cloudy_day", "name": "Weather", "whole": true },
+        { "key": "network", "icon": "swap_vert", "name": "Network", "whole": true },
+        { "key": "power", "icon": "eco", "name": "Power", "whole": true },
+        { "key": "agenda", "icon": "event", "name": "Up next", "whole": true }
+    ]
+    // a block that is one piece, as media is: nothing to add to it or take off
+    function systemBlockWhole(key) {
+        return key === "media" || !!(root.systemBlockCatalog.find((c) => {
+            return c.key === key;
+        }) || {}).whole;
+    }
+    readonly property var systemSliderCatalog: [
+        { "key": "brightness", "icon": "brightness_medium", "name": "Brightness" },
+        { "key": "volume", "icon": "volume_up", "name": "Volume" },
+        { "key": "mic", "icon": "mic", "name": "Microphone" }
+    ]
+    readonly property var systemInfoCatalog: [
+        { "key": "cpu", "icon": "memory", "name": "CPU" },
+        { "key": "ram", "icon": "memory_alt", "name": "Memory" },
+        { "key": "disk", "icon": "hard_drive", "name": "Disk" },
+        { "key": "battery", "icon": "battery_full", "name": "Battery" }
+    ]
+    // there were three blocks once: toggles held both kinds of tile, and
+    // system the media card (when it was on its list) and the gauges
+    readonly property var systemBlockKeys: {
+        const out = [];
+        const legacyMedia = String(root.systemInfo).split(",").map((x) => {
+            return x.trim();
+        }).indexOf("media") !== -1;
+        for (const k of String(root.systemBlocks || "").split(",").map((x) => {
+            return x.trim();
+        })) {
+            const keys = k === "toggles" ? ["bigtiles", "tiles"] : (k === "system" ? (legacyMedia ? ["media", "gauges"] : ["gauges"]) : [k]);
+            for (const x of keys) {
+                if (out.indexOf(x) === -1 && root.systemBlockCatalog.some((c) => {
+                    return c.key === x;
+                }))
+                    out.push(x);
+
+            }
+        }
+        return out;
+    }
+    readonly property bool systemLegacy: /\b(toggles|system)\b/.test(String(root.systemBlocks)) || /"(toggles|system)"/.test(String(root.systemGrid))
+
+    // writes the three old blocks out as the five, once the layout is edited
+    function systemMigrate() {
+        if (!root.systemLegacy)
+            return ;
+
+        root.systemGrid = JSON.stringify(root.systemGridSaved);
+        root.systemBlocks = root.systemBlockKeys.join(",");
+    }
+    readonly property var systemSliderKeys: root.prefList(root.systemSliders, root.systemSliderCatalog)
+    readonly property var systemInfoKeys: root.prefList(root.systemInfo, root.systemInfoCatalog)
+
+    // the control centre is a grid, bento style: each block sits at a column
+    // and a row and spans as many of each as it is given. a column is a tile
+    // wide and a row a thin strip, so a block is as tall as it is made, never
+    // less than what it holds. systemGrid keeps { key: { x, y, w, h, lie } },
+    // lie laying the sliders down
+    readonly property int systemGridCols: 16
+    readonly property var systemGridSaved: {
+        let v;
+        try {
+            v = JSON.parse(root.systemGrid || "{}");
+        } catch (e) {
+            return {};
+        }
+        if (!v || typeof v !== "object" || Array.isArray(v))
+            return {};
+
+        // an old block leaves its spot to the two it became, one over the other
+        const split = (old, top, under) => {
+            const r = v[old];
+            delete v[old];
+            if (!r)
+                return ;
+
+            if (!v[top])
+                v[top] = Object.assign({}, r, {
+                "h": 1
+            });
+
+            if (!v[under])
+                v[under] = Object.assign({}, r, {
+                "y": (Number(r.y) || 0) + 1,
+                "h": 1
+            });
+
+        };
+        split("toggles", "bigtiles", "tiles");
+        split("system", "media", "gauges");
+        return v;
+    }
+
+    // the fewest columns a block can do with: a standing slider each, room
+    // for the lying sliders' value and the media card, three tiles a row
+    function systemGridMinW(key, lie) {
+        if (key === "sliders")
+            return lie ? 3 : Math.max(1, root.systemSliderKeys.length);
+
+        if (key === "media")
+            return 4;
+
+        if (key === "gauges")
+            return 2;
+
+        if (key === "agenda")
+            return 4;
+
+        return 3;
+    }
+
+    // a width the block can take: standing sliders take whole columns each
+    function systemGridSnapW(key, lie, w) {
+        const least = root.systemGridMinW(key, lie);
+        // standing sliders a column or more each, big tiles three each
+        const n = key === "sliders" && !lie ? least : (key === "bigtiles" ? 3 : 1);
+        if (n > 1)
+            return Math.max(n, Math.min(Math.floor(root.systemGridCols / n), Math.round(w / n)) * n);
+
+        return Math.max(least, Math.min(root.systemGridCols, w));
+    }
+
+    function systemGridOverlap(a, b) {
+        return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    }
+
+    // a spot made whole: whole cells, inside the grid, no narrower than the
+    // block allows and no shorter than the rows its pieces need. until they
+    // are given a place the blocks make the one column the panel always had,
+    // six tiles wide, with the sliders lying down
+    function systemGridFit(key, r, need) {
+        const lie = r.lie === undefined ? true : !!r.lie;
+        const w = root.systemGridSnapW(key, lie, Math.round(Number(r.w) || 6));
+        return {
+            "x": Math.max(0, Math.min(root.systemGridCols - w, Math.round(Number(r.x) || 0))),
+            "y": Math.max(0, Math.round(Number(r.y) || 0)),
+            "w": w,
+            "h": Math.max(1, need || 1, Math.round(Number(r.h) || 0)),
+            "lie": lie
+        };
+    }
+
+    // where each of keys sits, given the rows each needs. top to bottom, each
+    // rises as far as the blocks above it in its columns let it, so a block that
+    // grew pushes the ones under it down and no empty rows are left between;
+    // one never placed goes under all the rest. grid, when given, stands in
+    // for the saved one, so a layout not in use can be drawn too
+    function systemGridPlace(keys, needs, grid) {
+        const need = needs || {};
+        const saved = grid || root.systemGridSaved;
+        const out = {};
+        // two on the same row keep the order of keys, whatever the sort does with a tie
+        const placed = keys.filter((k) => {
+            return !!saved[k];
+        }).map((k, i) => {
+            return {
+                "key": k,
+                "i": i,
+                "r": root.systemGridFit(k, saved[k], need[k])
+            };
+        }).sort((a, b) => {
+            return a.r.y - b.r.y || a.r.x - b.r.x || a.i - b.i;
+        });
+        const taken = [];
+        for (const p of placed) {
+            p.r.y = taken.reduce((y, t) => {
+                return t.x < p.r.x + p.r.w && p.r.x < t.x + t.w ? Math.max(y, t.y + t.h) : y;
+            }, 0);
+            out[p.key] = p.r;
+            taken.push(p.r);
+        }
+        for (const k of keys) {
+            if (out[k])
+                continue;
+
+            const r = root.systemGridFit(k, {}, need[k]);
+            r.y = taken.reduce((y, t) => {
+                return Math.max(y, t.y + t.h);
+            }, 0);
+            out[k] = r;
+            taken.push(r);
+        }
+        return out;
+    }
+
+    // a block that puts more height to use: standing sliders, gauges drawn as
+    // tiles or curves, the network's curves
+    function systemGridStretches(key, lie) {
+        if (key === "sliders")
+            return !lie;
+
+        if (key === "gauges")
+            return ["tiles", "graph"].indexOf(root.systemBlockStyle(key)) !== -1;
+
+        return key === "network" && root.systemBlockStyle(key) !== "line";
+    }
+
+    // the same, each block with nothing under it in its columns drawn down to the
+    // lowest one's foot, so the columns end together: always, for one that puts
+    // the height to use, and the rest only the strip or two rounding left
+    function systemGridFill(place, keys) {
+        const bottom = keys.reduce((y, k) => {
+            return place[k] ? Math.max(y, place[k].y + place[k].h) : y;
+        }, 0);
+        const out = {};
+        for (const k of keys) {
+            const r = place[k];
+            if (!r)
+                continue;
+
+            const under = keys.some((o) => {
+                const q = place[o];
+                return o !== k && !!q && q.y >= r.y + r.h && q.x < r.x + r.w && r.x < q.x + q.w;
+            });
+            const room = bottom - r.y - r.h;
+            out[k] = under || room === 0 || (room > 2 && !root.systemGridStretches(k, r.lie)) ? r : Object.assign({}, r, {
+                "h": bottom - r.y
+            });
+        }
+        return out;
+    }
+
+    // a layout still the one column, every block six across from the left edge,
+    // the sliders lying and nothing stretched by hand: the panel draws it as the
+    // column it always was, so a first change in the editor leaves it be
+    function systemGridColumnar(keys) {
+        const saved = root.systemGridSaved;
+        return keys.every((k) => {
+            const r = saved[k];
+            if (!r)
+                return true;
+
+            return Math.round(Number(r.x) || 0) === 0 && Math.round(Number(r.w) || 6) === 6 && Math.round(Number(r.h) || 0) <= 1 && (k !== "sliders" || r.lie === undefined || !!r.lie);
+        });
+    }
+
+    // puts a block at a new spot or size. a block it lands on takes the spot
+    // it left if it fits there, or else goes under it
+    // the height a block was given by hand, without what its pieces add. what
+    // is saved keeps to that, so a block that holds less later shrinks back
+    function systemGridOwnH(key) {
+        const r = root.systemGridSaved[key];
+        return Math.max(1, Math.round(Number(r && r.h) || 0));
+    }
+
+    function systemGridSet(key, spot, needs) {
+        root.systemGrid = JSON.stringify(root.systemGridPlan(key, spot, needs));
+    }
+
+    // the grid a move would leave, without writing it: the studio shows it live
+    // while a block is carried, the others stepping aside to where they would go
+    function systemGridPlan(key, spot, needs) {
+        const need = needs || {};
+        const now = root.systemGridPlace(root.systemBlockKeys, need);
+        const old = now[key] || root.systemGridFit(key, {}, need[key]);
+        const next = Object.assign({}, root.systemGridSaved);
+        for (const k of root.systemBlockKeys)
+            next[k] = Object.assign({}, now[k], {
+            "h": root.systemGridOwnH(k)
+        });
+        const moved = root.systemGridFit(key, Object.assign({}, old, spot), need[key]);
+        next[key] = Object.assign({}, moved, {
+            "h": spot.h === undefined ? root.systemGridOwnH(key) : moved.h
+        });
+        const taken = [moved];
+        const pushed = [];
+        for (const k of root.systemBlockKeys) {
+            if (k === key)
+                continue;
+
+            if (root.systemGridOverlap(now[k], moved))
+                pushed.push(k);
+            else
+                taken.push(now[k]);
+        }
+        // the ones that go under it keep the order they were in
+        const top = pushed.reduce((y, k) => {
+            return Math.min(y, now[k].y);
+        }, Infinity);
+        for (const k of pushed) {
+            const there = root.systemGridFit(k, Object.assign({}, now[k], {
+                "x": old.x,
+                "y": old.y
+            }), need[k]);
+            const r = taken.some((t) => {
+                return root.systemGridOverlap(there, t);
+            }) ? Object.assign({}, now[k], {
+                "y": moved.y + moved.h + now[k].y - top
+            }) : there;
+            next[k] = Object.assign({}, r, {
+                "h": root.systemGridOwnH(k)
+            });
+            taken.push(r);
+        }
+        return next;
+    }
+
+    // everything the control centre's layout is: which blocks, where, and
+    // what each holds. a saved layout, and each step undo goes back, is these
+    readonly property var systemLayoutKeys: ["systemBlocks", "systemGrid", "systemTiles", "systemTilesRadios", "systemBigTiles", "systemSliders", "systemInfo", "systemBlockStyles"]
+
+    // the looks each block can take; the first is the one it always had
+    readonly property var systemStyleCatalog: ({
+        "sliders": [{ "key": "plain", "name": I18n.tr("Plain") }, { "key": "bold", "name": I18n.tr("Bold") }, { "key": "thin", "name": I18n.tr("Thin") }, { "key": "wavy", "name": I18n.tr("Wavy") }],
+        "bigtiles": [{ "key": "pill", "name": I18n.tr("Pill") }, { "key": "shapes", "name": I18n.tr("Shapes") }, { "key": "compact", "name": I18n.tr("Compact") }, { "key": "outline", "name": I18n.tr("Outline") }],
+        "tiles": [{ "key": "round", "name": I18n.tr("Round") }, { "key": "shapes", "name": I18n.tr("Shapes") }, { "key": "icons", "name": I18n.tr("Icons only") }, { "key": "square", "name": I18n.tr("Square") }],
+        "media": [{ "key": "card", "name": I18n.tr("Card") }, { "key": "disc", "name": I18n.tr("Disc") }, { "key": "backdrop", "name": I18n.tr("Backdrop") }, { "key": "mini", "name": I18n.tr("Mini") }, { "key": "wave", "name": I18n.tr("Wave") }, { "key": "cover", "name": I18n.tr("Cover") }],
+        "gauges": [{ "key": "rings", "name": I18n.tr("Rings") }, { "key": "bars", "name": I18n.tr("Bars") }, { "key": "tiles", "name": I18n.tr("Tiles") }, { "key": "compact", "name": I18n.tr("Compact") }, { "key": "graph", "name": I18n.tr("Graph") }, { "key": "dial", "name": I18n.tr("Dial") }],
+        "weather": [{ "key": "card", "name": I18n.tr("Card") }, { "key": "hours", "name": I18n.tr("Hours") }, { "key": "days", "name": I18n.tr("Days") }, { "key": "line", "name": I18n.tr("One line") }],
+        "network": [{ "key": "graph", "name": I18n.tr("Graph") }, { "key": "split", "name": I18n.tr("Side by side") }, { "key": "line", "name": I18n.tr("One line") }],
+        "power": [{ "key": "buttons", "name": I18n.tr("Buttons") }, { "key": "icons", "name": I18n.tr("Icons only") }, { "key": "list", "name": I18n.tr("List") }],
+        "agenda": [{ "key": "list", "name": I18n.tr("List") }, { "key": "next", "name": I18n.tr("Next only") }]
+    })
+    // systemBlockStyles as JSON { block: look }, only the looks the catalogue knows
+    readonly property var systemStyleMap: {
+        let v = {};
+        try {
+            v = JSON.parse(root.systemBlockStyles || "{}");
+        } catch (e) {
+        }
+        const out = {};
+        for (const k in root.systemStyleCatalog) {
+            if (v && root.systemStyleCatalog[k].some((c) => {
+                return c.key === v[k];
+            }))
+                out[k] = v[k];
+
+        }
+        return out;
+    }
+
+    function systemBlockStyle(key) {
+        const l = root.systemStyleCatalog[key];
+        return root.systemStyleMap[key] || (l ? l[0].key : "");
+    }
+
+    // the first look is kept as no entry at all
+    function setSystemBlockStyle(key, look) {
+        const l = root.systemStyleCatalog[key];
+        if (!l)
+            return ;
+
+        const next = Object.assign({}, root.systemStyleMap);
+        if (look === l[0].key)
+            delete next[key];
+        else
+            next[key] = look;
+        root.systemBlockStyles = Object.keys(next).length === 0 ? "" : JSON.stringify(next);
+    }
+
+    function systemLayoutNow() {
+        const out = {};
+        for (const k of root.systemLayoutKeys)
+            out[k] = root[k];
+        return out;
+    }
+
+    function systemLayoutSame(a, b) {
+        return root.systemLayoutKeys.every((k) => {
+            return a[k] === b[k];
+        });
+    }
+
+    // only what a layout knows, and only when it is a value of the right kind
+    function systemLayoutApply(v) {
+        for (const k of root.systemLayoutKeys) {
+            if (v && v[k] !== undefined && typeof v[k] === typeof root[k] && root[k] !== v[k])
+                root[k] = v[k];
+
+        }
+    }
+
+    // the blocks a layout shows and where, without the legacy names
+    function systemLayoutGrid(v) {
+        try {
+            const g = JSON.parse(v.systemGrid || "{}");
+            return g && typeof g === "object" && !Array.isArray(g) ? g : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    // the user's own, as JSON [{ id, name, saved, layout }]
+    readonly property var systemLayoutList: {
+        let v = [];
+        try {
+            v = JSON.parse(root.systemLayouts || "[]");
+        } catch (e) {
+        }
+        return (Array.isArray(v) ? v : []).filter((l) => {
+            return l && l.id && l.layout && typeof l.layout === "object";
+        });
+    }
+
+    function systemLayoutNamed(name) {
+        const n = String(name).trim().toLowerCase();
+        return root.systemLayoutList.find((l) => {
+            return String(l.name).toLowerCase() === n;
+        }) || null;
+    }
+
+    // saving under a name already used updates that one
+    function saveSystemLayout(name) {
+        const n = String(name).trim();
+        if (n === "")
+            return ;
+
+        const was = root.systemLayoutNamed(n);
+        const entry = {
+            "id": was ? was.id : String(Date.now()),
+            "name": n,
+            "saved": Date.now(),
+            "layout": root.systemLayoutNow()
+        };
+        const list = root.systemLayoutList.filter((l) => {
+            return !was || l.id !== was.id;
+        });
+        root.systemLayouts = JSON.stringify(list.concat([entry]));
+    }
+
+    function deleteSystemLayout(id) {
+        const list = root.systemLayoutList.filter((l) => {
+            return l.id !== id;
+        });
+        root.systemLayouts = list.length === 0 ? "" : JSON.stringify(list);
+    }
+
+    function applySystemLayout(id) {
+        const l = root.systemLayoutList.find((x) => {
+            return x.id === id;
+        });
+        if (l)
+            root.systemLayoutApply(l.layout);
+
+    }
+
+    // ready-made arrangements of the blocks that are on: what each holds is left alone
+    readonly property var systemLayoutPresets: [
+        { "id": "column", "name": I18n.tr("Column"), "blurb": I18n.tr("One under another, six tiles wide") },
+        { "id": "pair", "name": I18n.tr("Two columns"), "blurb": I18n.tr("Sliders and tiles, then media and gauges beside them") },
+        { "id": "wide", "name": I18n.tr("Wide"), "blurb": I18n.tr("Standing sliders, the tiles, then media and gauges") }
+    ]
+
+    function systemPresetGrid(id) {
+        if (id === "pair")
+            return {
+                "sliders": { "x": 0, "y": 0, "w": 6, "lie": true },
+                "bigtiles": { "x": 0, "y": 1, "w": 6 },
+                "tiles": { "x": 0, "y": 2, "w": 6 },
+                "media": { "x": 6, "y": 0, "w": 6 },
+                "gauges": { "x": 6, "y": 1, "w": 6 }
+            };
+
+        // standing sliders down the left, the tiles beside them, media and the
+        // gauges at the right; each column runs down as far as the longest.
+        // three sliders take a third column, and the rest move over for it
+        if (id === "wide") {
+            const sw = root.systemGridMinW("sliders", false);
+            return {
+                "sliders": { "x": 0, "y": 0, "w": sw, "lie": false },
+                "bigtiles": { "x": sw, "y": 0, "w": 6 },
+                "tiles": { "x": sw, "y": 1, "w": 6 },
+                "media": { "x": sw + 6, "y": 0, "w": 5 },
+                "gauges": { "x": sw + 6, "y": 1, "w": 5 }
+            };
+        }
+        return {};
+    }
+
+    function applySystemPreset(id) {
+        const g = root.systemPresetGrid(id);
+        root.systemGrid = Object.keys(g).length === 0 ? "" : JSON.stringify(g);
+    }
+
+    // a comma list kept in a pref, as the keys a catalogue knows, once each
+    function prefList(text, catalogue) {
+        return String(text || "").split(",").map((x) => {
+            return x.trim();
+        }).filter((x, i, all) => {
+            return x !== "" && all.indexOf(x) === i && catalogue.some((c) => {
+                return c.key === x;
+            });
+        });
+    }
+
+    // every bar module, in one place: the id barLayout arranges it by, the
+    // show* pref that switches it on, the group it starts in, how edit mode
+    // names it, and where any settings it has elsewhere live (more, page), and,
+    // for one that leaves the bar while it has nothing to show, when it is
+    // there (when). the modules that came with the privacy, power and window
+    // pills also name their options and looks (options, style, panelStyle);
+    // BarStyleSample draws a sample of each look
+    readonly property var barModules: [
+    {
+        "id": "workspaces",
+        "icon": "workspaces",
+        "key": "showWorkspaces",
+        "home": "left",
+        "name": I18n.tr("Workspaces"),
+        "desc": I18n.tr("Workspace pills and the expanded overview"),
+        "more": I18n.tr("Special workspaces, which it shows as well, have a page of their own."),
+        "page": "workspaces",
+        "options": ["workspacesShown", "workspacesWheel", "workspacesLegacy"],
+        "style": "workspacesStyle",
+        "styles": [
+            {"key": "dots", "name": I18n.tr("Shapes"), "blurb": I18n.tr("A dot while empty, a square in use, a new shape on the one you are on")},
+            {"key": "numbers", "name": I18n.tr("Numbers"), "blurb": I18n.tr("Each one's number, the empty ones quieter")}
+        ]
+    },
+    {
+        "id": "media",
+        "icon": "music_note",
+        "key": "showMedia",
+        "home": "left",
+        "name": I18n.tr("Media"),
+        "desc": I18n.tr("Now-playing pill and player controls"),
+        "when": I18n.tr("while something plays"),
+        "options": ["mediaHideIdle", "mediaArtist", "mediaTitleWidth", "mediaPlayButton", "mediaWheelVolume", "mediaLyrics"],
+        "style": "mediaStyle",
+        "styles": [
+            {"key": "disc", "name": I18n.tr("Disc"), "blurb": I18n.tr("The cover turning in a ring that fills as it plays")},
+            {"key": "cover", "name": I18n.tr("Cover"), "blurb": I18n.tr("The album's cover standing still, then the track")},
+            {"key": "compact", "name": I18n.tr("Compact"), "blurb": I18n.tr("Only the moving bars and the play button")},
+            {"key": "progress", "name": I18n.tr("Progress"), "blurb": I18n.tr("The pill fills as the song goes")},
+            {"key": "controls", "name": I18n.tr("Controls"), "blurb": I18n.tr("Previous, play and next, then the track")}
+        ],
+        "panelStyle": "mediaPanelStyle",
+        "panelStyles": [
+            {"key": "side", "name": I18n.tr("Side by side"), "blurb": I18n.tr("The cover beside the track")},
+            {"key": "cover", "name": I18n.tr("Large cover"), "blurb": I18n.tr("The cover across the panel, the track under it")},
+            {"key": "vinyl", "name": I18n.tr("Vinyl"), "blurb": I18n.tr("The cover as a record that turns while it plays")},
+            {"key": "backdrop", "name": I18n.tr("Backdrop"), "blurb": I18n.tr("Side by side, over the cover blurred across the panel")},
+            {"key": "mini", "name": I18n.tr("Mini"), "blurb": I18n.tr("No cover: the track, its progress and the controls")}
+        ]
+    },
+    {
+        "id": "tray",
+        "icon": "inventory_2",
+        "key": "showTray",
+        "home": "left",
+        "name": I18n.tr("Tray"),
+        "desc": I18n.tr("Status icons from running applications"),
+        "when": I18n.tr("while an app has an icon in the tray"),
+        "options": ["trayHidden", "trayIconColor"],
+        "style": "trayStyle",
+        "styles": [
+            {"key": "collapsed", "name": I18n.tr("Collapsed"), "blurb": I18n.tr("The first three apps stacked, then how many more")},
+            {"key": "icons", "name": I18n.tr("Icons"), "blurb": I18n.tr("Each app in a slot of its own, named when you point at it")}
+        ]
+    },
+    {
+        "id": "clock",
+        "icon": "schedule",
+        "key": "showClock",
+        "home": "center",
+        "name": I18n.tr("Clock"),
+        "desc": I18n.tr("Time, date and the calendar panel"),
+        "more": I18n.tr("The time format, seconds, the temperature, whether the date shows and the time zone are on the Date & Time page."),
+        "page": "datetime",
+        "options": ["clockDateFormat"],
+        "style": "clockStyle",
+        "styles": [
+            {"key": "accent", "name": I18n.tr("Accent"), "blurb": I18n.tr("The date, then the time on an accent chip")},
+            {"key": "inline", "name": I18n.tr("One line"), "blurb": I18n.tr("The time, then the date")},
+            {"key": "stacked", "name": I18n.tr("Two lines"), "blurb": I18n.tr("The date small under the time")}
+        ]
+    },
+    {
+        "id": "notifications",
+        "icon": "notifications",
+        "key": "showNotifications",
+        "home": "right",
+        "name": I18n.tr("Notifications"),
+        "desc": I18n.tr("Toasts and the notification list"),
+        "when": I18n.tr("while a notification is waiting"),
+        "more": I18n.tr("Do not disturb, popups, sounds and quiet hours are on the Notifications page."),
+        "page": "notifications",
+        "style": "notificationsStyle",
+        "styles": [
+            {"key": "badge", "name": I18n.tr("Count"), "blurb": I18n.tr("The bell and how many are waiting")},
+            {"key": "dot", "name": I18n.tr("Dot"), "blurb": I18n.tr("The bell with a dot while any are waiting")}
+        ]
+    },
+    {
+        "id": "system",
+        "icon": "tune",
+        "key": "showSystem",
+        "home": "right",
+        "name": I18n.tr("System"),
+        "desc": I18n.tr("Battery, volume, brightness and quick settings"),
+        "options": ["systemBarItems", "showKbLayout", "gameModeOnCmd", "gameModeOffCmd", "gameModeStatusCmd", "systemTiles", "systemTilesRadios", "systemBigTiles", "systemBlocks", "systemGrid", "systemBlockCards", "systemBlockStyles", "systemOwnTiles", "systemSliders", "systemInfo", "systemHeaderButtons"]
+    },
+    {
+        "id": "privacy",
+        "icon": "privacy",
+        "key": "showPrivacy",
+        "home": "right",
+        "name": I18n.tr("Privacy"),
+        "desc": I18n.tr("Shows up only while an app uses the microphone, the camera or the screen, and says which"),
+        "when": I18n.tr("while an app uses the microphone, the camera or the screen"),
+        "options": ["privacyWatch", "privacyToast", "privacyAlwaysShown"],
+        "style": "privacyStyle",
+        "styles": [
+            {"key": "marks", "name": I18n.tr("Marks"), "blurb": I18n.tr("A tinted mark for each thing in use")},
+            {"key": "dot", "name": I18n.tr("Dot"), "blurb": I18n.tr("One small dot, red while the screen is shared")}
+        ]
+    },
+    {
+        "id": "power",
+        "icon": "power_settings_new",
+        "key": "showPower",
+        "home": "right",
+        "name": I18n.tr("Power"),
+        "desc": I18n.tr("Lock, suspend, log out, restart or shut down, the ones you pick in the order you pick"),
+        "options": ["powerModuleActions", "powerModuleConfirm", "powerModuleUptime"],
+        "style": "powerModuleStyle",
+        "styles": [
+            {"key": "icon", "name": "Icon", "blurb": I18n.tr("The power symbol")},
+            {"key": "accent", "name": I18n.tr("Accent"), "blurb": I18n.tr("The symbol on a circle in the accent")}
+        ],
+        "panelStyle": "powerModulePanelStyle",
+        "panelStyles": [
+            {"key": "list", "name": I18n.tr("List"), "blurb": I18n.tr("One action to a row")},
+            {"key": "grid", "name": I18n.tr("Grid"), "blurb": I18n.tr("Three to a row, the name under each")}
+        ]
+    },
+    {
+        "id": "window",
+        "icon": "select_window",
+        "key": "showWindow",
+        "home": "right",
+        "first": true,
+        "name": I18n.tr("Active window"),
+        "desc": I18n.tr("The focused window's icon and title; open it to float, pin, fullscreen, move or close it, or switch to another window on the workspace"),
+        "when": I18n.tr("while a window on this workspace has the focus"),
+        "options": ["windowModuleText", "windowModuleWidth", "windowModuleScroll", "windowModuleMiddleClose"]
+    },
+    {
+        "id": "start",
+        "icon": "apps",
+        "key": "showStart",
+        "home": "left",
+        "first": true,
+        "name": I18n.tr("Start"),
+        "desc": I18n.tr("A button for the launcher, at the start of the bar: a click opens it or puts it away"),
+        "style": "startModuleStyle",
+        "styles": [
+            {"key": "grid", "name": I18n.tr("Launcher"), "blurb": I18n.tr("The dock's launcher button, its squares rounding while the launcher is open")},
+            {"key": "logo", "name": I18n.tr("Logo"), "blurb": I18n.tr("Lucid's mark, as at the top of the launcher")},
+            {"key": "distro", "name": I18n.tr("Distro"), "blurb": I18n.tr("Your distribution's logo, in the accent")},
+            {"key": "avatar", "name": I18n.tr("Avatar"), "blurb": I18n.tr("Your profile picture")},
+            {"key": "label", "name": I18n.tr("Label"), "blurb": I18n.tr("The word Start on a chip in the accent")}
+        ]
+    },
+    {
+        "id": "apps",
+        "key": "showApps",
+        "home": "center",
+        "name": I18n.tr("Apps"),
+        "desc": I18n.tr("The dock's pinned apps and the ones open, on the bar: a click opens an app or brings it up; with several windows, or on a right click, a panel lists them"),
+        "when": I18n.tr("while there is an app pinned or open"),
+        "options": ["dockShowRunning", "dockShowIndicators", "dockShowTooltips", "dockIconTiles"]
+    }
+    ]
+
+    // the notification page's own header switch, which is the module's
+    readonly property bool barNotifications: root.showNotifications
+    readonly property bool anyBarModuleEnabled: root.barModules.some((m) => {
+        return root[m.key] === true;
+    })
+    readonly property var barModuleKeys: root.barModules.map((m) => {
+        return m.key;
+    })
+    readonly property var barModuleHome: {
+        const out = {};
+        for (const m of root.barModules)
+            out[m.id] = m.home;
+        return out;
+    }
+    // the part of a module's card to bring into view as its sheet opens ("" for
+    // the top of it)
+    property string barModulePart: ""
+    // the ids of the modules switched on that the bar leaves out right now,
+    // having nothing to show (an empty tray); the bar keeps it up to date, and
+    // a module's "when" in barModules says when it comes back
+    property var barModulesAway: []
+
+    // a module's options live in edit mode's sheet now
+    function openBarModule(id, part) {
+        root.barModulePart = part || "";
+        Edit.openSheet("module", id, "", "");
+    }
+
+    readonly property var barModuleById: {
+        const out = {};
+        for (const m of root.barModules)
+            out[m.id] = m;
+        return out;
+    }
+    readonly property var barLayoutGroups: root.parseBarLayout(root.barLayout)
+    readonly property var widgetKeys: ["widgetsEnabled", "widgetSnap", "widgetLockAll", "widgetHideFullscreen", "widgetOnTop"]
+    readonly property var lockKeys: ["lockPreset", "lockSlots", "lockWidgetOpts", "lockBlur", "lockDim", "lockTint", "lockDive", "lockIdleBack", "lockOtherScreens", "lockLoginWeather", "lockLoginSync"]
+    readonly property var idleKeys: ["idleDim", "idleDimAfter", "idleDimLevel", "idleDimKeyboard", "idleLock", "idleLockAfter", "idleScreenOff", "idleScreenOffAfter", "idleSuspend", "idleSuspendAfter", "idleSuspendOnAc", "idleLockBeforeSleep", "idleWakeAfterSleep", "idleRespectInhibitors", "idleWhileMedia"]
+    readonly property var envKeys: ["envCursorTheme", "envCursorSize", "envCursorShadow", "envLegacyCursor", "envCursorStyle", "envCursorSet", "envIconTheme", "envLegacyIcons", "envIconSet", "envGtkTheme", "envQtStyle", "envQtPlatformTheme", "envColorScheme", "envFontSync", "envAppFont", "envAppFontSize", "envDocumentFont", "envDocumentFontSize", "envMonoFont", "envMonoFontSize", "envApplyGtk", "envApplyQt", "envApplyHypr", "envAdopted"]
+    readonly property var specialKeys: ["specialScratchpad", "specialMusic", "specialComms", "specialTodo", "specialSysmon", "specialMusicApps", "specialCommsApps", "specialTodoApps", "specialSysmonApps", "specialKeepApps", "specialHideOnSwitch", "specialDim", "specialBlur", "specialGaps"]
+    readonly property var glassKeys: ["glassApps", "glassValues"]
+    readonly property var monitorKeys: ["monitorSetups", "monitorShellScreen", "monitorBarScreen", "monitorDockScreen", "monitorWorkspaces"]
+    readonly property var notifKeys: ["toastEnabled", "toastTimeout", "toastUseAppTimeout", "toastCriticalSticky", "toastShowBody", "toastShowActions", "toastBodyLines", "notifShowIcons", "notifMaxHistory", "doNotDisturb", "dndAllowCritical", "dndFullscreen", "quietHours", "quietFrom", "quietTo", "notifSound", "notifSoundName", "notifSoundVolume", "notifSoundUrgentOnly", "notifMutedApps", "notifGrouping", "notifTimestamps", "notifProgress", "notifInlineReply", "toastMaxVisible"]
+
+    property alias barStyle: s.barStyle
+    property alias barPosition: s.barPosition
+    property alias dockStyle: s.dockStyle
+    property alias accentPunch: s.accentPunch
+    property alias surfaceDarkness: s.surfaceDarkness
+    property alias surfaceTint: s.surfaceTint
+    property alias motionScale: s.motionScale
+    property alias jellyMotion: s.jellyMotion
+    property alias jellyAmount: s.jellyAmount
+    property alias fontFamily: s.fontFamily
+    property alias fontScale: s.fontScale
+    property alias uiScale: s.uiScale
+    property alias language: s.language
+    property alias cornerScale: s.cornerScale
+    // room the bar and dock keep clear of windows, past their own size: added to
+    // their exclusive zones, in real pixels like hyprland's gaps
+    property alias shellGap: s.shellGap
+    // the same clamp Theme.uiScale applies, for code that has to wait on Prefs.loaded
+    readonly property real interfaceScale: Math.max(0.7, Math.min(1.3, root.uiScale || 1))
+    property alias wallpaperFolder: s.wallpaperFolder
+    property alias wallpaperPickerStyle: s.wallpaperPickerStyle
+    property alias wallpaperPickerKeys: s.wallpaperPickerKeys
+    property alias liveWallpapers: s.liveWallpapers
+    property alias liveDecoder: s.liveDecoder
+    property alias livePauseUnder: s.livePauseUnder
+    property alias liveGameMode: s.liveGameMode
+    property alias wallpaperPillsShape: s.wallpaperPillsShape
+    property alias wallpaperStripSteps: s.wallpaperStripSteps
+    property alias wallpaperStripSides: s.wallpaperStripSides
+    property alias wallpaperTilesRows: s.wallpaperTilesRows
+    property alias wallpaperTilesAspect: s.wallpaperTilesAspect
+    property alias wallpaperBentoHero: s.wallpaperBentoHero
+    property alias wallpaperBentoPrev: s.wallpaperBentoPrev
+    property alias wallTransType: s.wallTransType
+    property alias wallTransDuration: s.wallTransDuration
+    property alias wallTransAngle: s.wallTransAngle
+    property alias wallTransOrigin: s.wallTransOrigin
+    property alias wallTransBezier: s.wallTransBezier
+    property alias wallTransWave: s.wallTransWave
+    property alias wallTransPreset: s.wallTransPreset
+    property alias wallTransCustomPresets: s.wallTransCustomPresets
+    // bracket writes on the adapter are dropped, so this must go through the alias
+    property alias themeOrder: s.themeOrder
+    // built-in themes taken off the list, comma-separated
+    property alias hiddenThemes: s.hiddenThemes
+    // how matugen builds a palette, from the wallpaper or from themeColour: its
+    // scheme type, contrast from -1 to 1, and which of the wallpaper's dominant
+    // colours to start from (the index holds for matugenSourceImage only; any
+    // other wallpaper starts from its most dominant)
+    property alias matugenScheme: s.matugenScheme
+    property alias matugenContrast: s.matugenContrast
+    property alias matugenSourceImage: s.matugenSourceImage
+    property alias matugenSourceIndex: s.matugenSourceIndex
+    // the one colour the "colour" theme is built from
+    property alias themeColour: s.themeColour
+    property string currentTheme: "matugen"
+    readonly property string wallpaperDir: root.wallpaperDirFor(root.currentTheme)
+    // "dark" | "light". kept in ~/.cache/current_mode beside current_theme
+    // because set-wallpaper.sh and apply-theme.sh have to agree on it too
+    property string colorMode: "dark"
+
+    function setColorMode(mode) {
+        if ((mode !== "dark" && mode !== "light") || mode === root.colorMode)
+            return;
+
+        // set straight away so the control answers the click; the cache file is
+        // what actually confirms it, and the palette lands a moment later
+        root.colorMode = mode;
+        // a light shell beside dark application chrome reads as broken, so apps
+        // follow. the Environment page can still be set back to auto afterwards
+        root.envColorScheme = mode;
+        // Env owns the theme names and knows what is installed, so the matching
+        // GTK and icon variants are swapped there
+        root.colorModeApplied(mode);
+        Quickshell.execDetached([Quickshell.env("HOME") + "/.config/lucid/set-mode.sh", mode]);
+    }
+
+    property alias barEnabled: s.barEnabled
+    property alias barPopupMode: s.barPopupMode
+    property alias barPopupGap: s.barPopupGap
+    property alias barPopupNotched: s.barPopupNotched
+    property alias barHeight: s.barHeight
+    property alias barContentScale: s.barContentScale
+    property alias barTopMargin: s.barTopMargin
+    property alias barSideMargin: s.barSideMargin
+    property alias barSpacing: s.barSpacing
+    property alias barHoverGrow: s.barHoverGrow
+    // set-wallpaper.sh picks light or dark from the picture's brightness; the
+    // shell only follows what it wrote to current_mode (see that FileView)
+    property alias autoColorMode: s.autoColorMode
+
+    function setAutoColorMode(on) {
+        root.autoColorMode = on;
+        // the picture on screen now, measured the same way a new one would be
+        if (on)
+            Quickshell.execDetached([Quickshell.env("HOME") + "/.config/lucid/set-mode.sh", "auto"]);
+    }
+
+    property alias barZoneGap: s.barZoneGap
+    property alias systemTiles: s.systemTiles
+    property alias systemTilesRadios: s.systemTilesRadios
+    property alias systemBigTiles: s.systemBigTiles
+    property alias systemBlocks: s.systemBlocks
+    property alias systemSliders: s.systemSliders
+    property alias systemInfo: s.systemInfo
+    property alias systemGrid: s.systemGrid
+    property alias systemBlockCards: s.systemBlockCards
+    property alias systemOwnTiles: s.systemOwnTiles
+    property alias systemBlockStyles: s.systemBlockStyles
+    property alias systemLayouts: s.systemLayouts
+    property alias systemHeaderButtons: s.systemHeaderButtons
+    property alias barLayout: s.barLayout
+    property alias barJoins: s.barJoins
+    property alias barJoinDividers: s.barJoinDividers
+    property alias showWorkspaces: s.showWorkspaces
+    property alias showMedia: s.showMedia
+    property alias showTray: s.showTray
+    property alias showKbLayout: s.showKbLayout
+    property alias systemBarItems: s.systemBarItems
+    property alias gameModeOnCmd: s.gameModeOnCmd
+    property alias gameModeOffCmd: s.gameModeOffCmd
+    property alias gameModeStatusCmd: s.gameModeStatusCmd
+
+    // game mode, as the tile, the thermals card and the games widget run it. with
+    // both commands left empty it is Lucid's own: animations, blur, shadows,
+    // rounding and gaps off, their values kept inside hyprland and put back after,
+    // so turning it off needs no reload (which would reset the keyboard layout)
+    readonly property var gameModeKeys: ["animations.enabled", "decoration.blur.enabled", "decoration.shadow.enabled", "decoration.rounding", "general.gaps_in", "general.gaps_out"]
+    readonly property string gameModeMarker: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/lucid-gamemode"
+    readonly property bool gameModeUsesDefault: root.gameModeOnCmd.trim() === "" && root.gameModeOffCmd.trim() === ""
+    readonly property string gameModeDefaultOn: {
+        const keys = root.gameModeKeys.map((k) => {
+            return JSON.stringify(k);
+        }).join(", ");
+        const off = "[\"animations.enabled\"] = false, [\"decoration.blur.enabled\"] = false, [\"decoration.shadow.enabled\"] = false, [\"decoration.rounding\"] = 0, [\"general.gaps_in\"] = 0, [\"general.gaps_out\"] = 0";
+        const lua = "LucidGameMode = LucidGameMode or {} for _, k in ipairs({ " + keys + " }) do if LucidGameMode[k] == nil then local ok, v = pcall(hl.get_config, k) if ok then LucidGameMode[k] = v end end end hl.config({ " + off + " })";
+        return "hyprctl eval '" + lua + "' && touch '" + root.gameModeMarker + "'";
+    }
+    readonly property string gameModeDefaultOff: "rm -f '" + root.gameModeMarker + "'; hyprctl eval 'if LucidGameMode then for k, v in pairs(LucidGameMode) do pcall(hl.config, { [k] = v }) end LucidGameMode = nil end'"
+    readonly property string gameModeOnRun: root.gameModeUsesDefault ? root.gameModeDefaultOn : root.gameModeOnCmd
+    readonly property string gameModeOffRun: root.gameModeUsesDefault ? root.gameModeDefaultOff : root.gameModeOffCmd
+    readonly property string gameModeStatusRun: root.gameModeStatusCmd.trim() !== "" ? root.gameModeStatusCmd : (root.gameModeUsesDefault ? "test -f '" + root.gameModeMarker + "'" : "")
+    readonly property bool gameModeConfigured: root.gameModeUsesDefault || (root.gameModeOnCmd.trim() !== "" && root.gameModeOffCmd.trim() !== "")
+
+    readonly property string gameModeStateFile: {
+        const m = /(?:test|\[)\s+-[ef]\s+(\S+)/.exec(root.gameModeStatusRun || "");
+        return m ? m[1].replace(/^['"]|['"]$/g, "") : "";
+    }
+    property alias showClock: s.showClock
+    property alias showNotifications: s.showNotifications
+    property alias showSystem: s.showSystem
+    property alias showPrivacy: s.showPrivacy
+    property alias privacyWatch: s.privacyWatch
+    property alias privacyToast: s.privacyToast
+    property alias privacyAlwaysShown: s.privacyAlwaysShown
+    property alias privacyStyle: s.privacyStyle
+    property alias showPower: s.showPower
+    property alias powerModuleActions: s.powerModuleActions
+    property alias powerModuleConfirm: s.powerModuleConfirm
+    property alias powerModuleUptime: s.powerModuleUptime
+    property alias powerModuleStyle: s.powerModuleStyle
+    property alias powerModulePanelStyle: s.powerModulePanelStyle
+    property alias showWindow: s.showWindow
+    property alias windowModuleText: s.windowModuleText
+    property alias windowModuleWidth: s.windowModuleWidth
+    property alias windowModuleScroll: s.windowModuleScroll
+    property alias windowModuleMiddleClose: s.windowModuleMiddleClose
+    property alias showStart: s.showStart
+    property alias startModuleStyle: s.startModuleStyle
+    property alias showApps: s.showApps
+    property alias workspacesByDisplay: s.workspacesByDisplay
+    property alias audioMeters: s.audioMeters
+    property alias clockStyle: s.clockStyle
+    property alias clockDateFormat: s.clockDateFormat
+    property alias mediaStyle: s.mediaStyle
+    property alias mediaPanelStyle: s.mediaPanelStyle
+    property alias mediaHideIdle: s.mediaHideIdle
+    property alias mediaArtist: s.mediaArtist
+    property alias mediaTitleWidth: s.mediaTitleWidth
+    property alias mediaPlayButton: s.mediaPlayButton
+    property alias mediaWheelVolume: s.mediaWheelVolume
+    property alias mediaLyrics: s.mediaLyrics
+    property alias workspacesStyle: s.workspacesStyle
+    property alias workspacesShown: s.workspacesShown
+    property alias workspacesWheel: s.workspacesWheel
+    property alias workspacesLegacy: s.workspacesLegacy
+    property alias notificationsStyle: s.notificationsStyle
+    property alias trayStyle: s.trayStyle
+    property alias trayIconColor: s.trayIconColor
+    property alias trayHidden: s.trayHidden
+    property alias clock24h: s.clock24h
+    property alias lockPreset: s.lockPreset
+    property alias lockSlots: s.lockSlots
+    property alias lockWidgetOpts: s.lockWidgetOpts
+    property alias lockBlur: s.lockBlur
+    property alias lockDim: s.lockDim
+    property alias lockTint: s.lockTint
+    property alias lockDive: s.lockDive
+    property alias lockIdleBack: s.lockIdleBack
+    property alias lockOtherScreens: s.lockOtherScreens
+    property alias lockLoginWeather: s.lockLoginWeather
+    property alias lockLoginSync: s.lockLoginSync
+    property alias clockShowDate: s.clockShowDate
+    property alias gpsEnabled: s.gpsEnabled
+    property alias locationName: s.locationName
+    property alias locationLabel: s.locationLabel
+    property alias locationLat: s.locationLat
+    property alias locationLon: s.locationLon
+    property alias nightLight: s.nightLight
+    property alias nightLightTemp: s.nightLightTemp
+    property alias nightLightSchedule: s.nightLightSchedule
+    property alias nightLightFrom: s.nightLightFrom
+    property alias nightLightTo: s.nightLightTo
+    property alias locationTz: s.locationTz
+    property alias timeZoneAuto: s.timeZoneAuto
+    property alias doNotDisturb: s.doNotDisturb
+    readonly property bool osdNotch: root.osdStyle === "notch"
+    // caps lock, num lock and the microphone show as a toast instead of on the osd
+    readonly property bool osdTogglesToast: root.osdToggles === "toast"
+    property alias osdStyle: s.osdStyle
+    // with the dock a notch too, the dock itself turns into the osd
+    property alias osdDockMorph: s.osdDockMorph
+    property alias osdToggles: s.osdToggles
+    property alias toastTimeout: s.toastTimeout
+    property alias toastOnLayout: s.toastOnLayout
+    property alias toastOnGameMode: s.toastOnGameMode
+    property alias toastOnBattery: s.toastOnBattery
+    property alias toastOnBluetooth: s.toastOnBluetooth
+    property alias toastOnWifi: s.toastOnWifi
+    property alias toastOnAudio: s.toastOnAudio
+    property alias toastOnDisplays: s.toastOnDisplays
+    property alias toastOnPower: s.toastOnPower
+    property alias toastOnUsb: s.toastOnUsb
+    property alias toastOnCamera: s.toastOnCamera
+    property alias toastEnabled: s.toastEnabled
+    property alias toastUseAppTimeout: s.toastUseAppTimeout
+    property alias toastCriticalSticky: s.toastCriticalSticky
+    property alias toastShowBody: s.toastShowBody
+    property alias toastShowActions: s.toastShowActions
+    property alias toastBodyLines: s.toastBodyLines
+    property alias notifShowIcons: s.notifShowIcons
+    property alias notifMaxHistory: s.notifMaxHistory
+    property alias dndAllowCritical: s.dndAllowCritical
+    property alias dndFullscreen: s.dndFullscreen
+    property alias quietHours: s.quietHours
+    property alias quietFrom: s.quietFrom
+    property alias quietTo: s.quietTo
+    property alias notifSound: s.notifSound
+    property alias notifSoundName: s.notifSoundName
+    property alias notifSoundVolume: s.notifSoundVolume
+    property alias notifSoundUrgentOnly: s.notifSoundUrgentOnly
+    property alias sysSounds: s.sysSounds
+    property alias sysSoundVolume: s.sysSoundVolume
+    property alias soundOnUsb: s.soundOnUsb
+    property alias soundOnBluetooth: s.soundOnBluetooth
+    property alias soundOnCharger: s.soundOnCharger
+    property alias soundOnBattery: s.soundOnBattery
+    property alias soundOnCapture: s.soundOnCapture
+    property alias soundOnCamera: s.soundOnCamera
+    property alias soundOnVolume: s.soundOnVolume
+    property alias soundOnBrightness: s.soundOnBrightness
+    property alias soundOnCaps: s.soundOnCaps
+    property alias soundOnMic: s.soundOnMic
+    // comma-joined; bracket writes on the adapter are dropped, so both go through the alias
+    property alias notifMutedApps: s.notifMutedApps
+    property alias notifSeenApps: s.notifSeenApps
+    property alias notifGrouping: s.notifGrouping
+    property alias notifTimestamps: s.notifTimestamps
+    property alias notifProgress: s.notifProgress
+    property alias notifInlineReply: s.notifInlineReply
+    property alias toastMaxVisible: s.toastMaxVisible
+
+    property alias dockEnabled: s.dockEnabled
+    property alias dockAsideForBar: s.dockAsideForBar
+    property alias dockIconSize: s.dockIconSize
+    property alias dockSpacing: s.dockSpacing
+    property alias dockRadius: s.dockRadius
+    property alias dockIconPadding: s.dockIconPadding
+    property alias dockBottomMargin: s.dockBottomMargin
+    property alias dockMagnify: s.dockMagnify
+    property alias dockHoverEffect: s.dockHoverEffect
+    property alias barMotionScale: s.barMotionScale
+    property alias barNotchFlare: s.barNotchFlare
+    // the concave corners the full bar hangs against the screen sides
+    property alias barFullCorner: s.barFullCorner
+    // notches: the modules at either end sit against the screen sides and curve into them
+    property alias barNotchEdge: s.barNotchEdge
+    property alias barHoverOpen: s.barHoverOpen
+    property alias barAutoHide: s.barAutoHide
+    property alias dockNotchFlare: s.dockNotchFlare
+    property alias dockSplitGap: s.dockSplitGap
+    property alias dockAutoHide: s.dockAutoHide
+    property alias dockDynamicHide: s.dockDynamicHide
+    property alias dockShowIndicators: s.dockShowIndicators
+    property alias dockShowTooltips: s.dockShowTooltips
+    property alias dockShowRunning: s.dockShowRunning
+    property alias dockIconTiles: s.dockIconTiles
+    property alias clipboardEnabled: s.clipboardEnabled
+
+    property alias widgetsEnabled: s.widgetsEnabled
+    property alias widgetSnap: s.widgetSnap
+    property alias widgetLockAll: s.widgetLockAll
+    property alias widgetHideFullscreen: s.widgetHideFullscreen
+    property alias widgetOnTop: s.widgetOnTop
+
+    property alias btScanOnOpen: s.btScanOnOpen
+    property alias btShowUnnamed: s.btShowUnnamed
+    property alias btReceive: s.btReceive
+    property alias btAgent: s.btAgent
+    property alias btReceiveFolder: s.btReceiveFolder
+    property alias btReceiveAutoPaired: s.btReceiveAutoPaired
+    property alias audioMoveStreams: s.audioMoveStreams
+    // device names the combined output plays on, comma separated; it exists
+    // while two or more are ticked
+    property alias audioCombine: s.audioCombine
+    property alias kdeConnectEnabled: s.kdeConnectEnabled
+    property alias updateCheck: s.updateCheck
+    // the newest commit on main, offered for install before it is a release
+    property alias updateBeta: s.updateBeta
+    property alias storageLowWarn: s.storageLowWarn
+    property alias storageLowPercent: s.storageLowPercent
+    // 0 means never
+    property alias storageTrashDays: s.storageTrashDays
+
+    property alias specialScratchpad: s.specialScratchpad
+    property alias specialMusic: s.specialMusic
+    property alias specialComms: s.specialComms
+    property alias specialTodo: s.specialTodo
+    property alias specialSysmon: s.specialSysmon
+    // comma-joined app ids, or "auto" for the first one installed
+    property alias specialMusicApps: s.specialMusicApps
+    property alias specialCommsApps: s.specialCommsApps
+    property alias specialTodoApps: s.specialTodoApps
+    property alias specialSysmonApps: s.specialSysmonApps
+    property alias specialKeepApps: s.specialKeepApps
+    property alias specialHideOnSwitch: s.specialHideOnSwitch
+    property alias specialDim: s.specialDim
+    property alias specialBlur: s.specialBlur
+    property alias specialGaps: s.specialGaps
+    // the workspaces you made, a JSON list of { key, label, glyph, on, apps }
+    property alias specialCustom: s.specialCustom
+    // Hyprland options set from Settings > Windows, as JSON { "general.gaps_in": 8, ... }
+    property alias hyprOptions: s.hyprOptions
+    property alias pinBorder: s.pinBorder
+    property alias pinBadge: s.pinBadge
+    property alias pinPulse: s.pinPulse
+    property alias urgentBadge: s.urgentBadge
+    property alias urgentPulse: s.urgentPulse
+    // Settings > Startup: JSON lists of { name, cmd, entry, on } and { name, value, on },
+    // and whether the session starts the XDG autostart entries
+    property alias startupApps: s.startupApps
+    property alias startupEnv: s.startupEnv
+    property alias startupXdg: s.startupXdg
+
+    property alias glassApps: s.glassApps
+    property alias glassValues: s.glassValues
+
+    // per-output display config, JSON keyed by hyprland monitor selector
+    property alias monitorSetups: s.monitorSetups
+    property alias monitorShellScreen: s.monitorShellScreen
+    // empty means the bar or dock goes wherever the shell went
+    property alias monitorBarScreen: s.monitorBarScreen
+    property alias monitorDockScreen: s.monitorDockScreen
+    property alias monitorWorkspaces: s.monitorWorkspaces
+
+    property alias idleEnabled: s.idleEnabled
+    property alias idleAutostart: s.idleAutostart
+    property alias idleKeepAwake: s.idleKeepAwake
+    // one-shot: the hand-written hypridle.conf is read into these keys once
+    property alias idleAdopted: s.idleAdopted
+    property alias idleDim: s.idleDim
+    property alias idleDimAfter: s.idleDimAfter
+    property alias idleDimLevel: s.idleDimLevel
+    property alias idleDimKeyboard: s.idleDimKeyboard
+    property alias idleLock: s.idleLock
+    property alias idleLockAfter: s.idleLockAfter
+    property alias idleScreenOff: s.idleScreenOff
+    property alias idleScreenOffAfter: s.idleScreenOffAfter
+    property alias idleSuspend: s.idleSuspend
+    property alias idleSuspendAfter: s.idleSuspendAfter
+    property alias idleSuspendOnAc: s.idleSuspendOnAc
+    property alias idleLockBeforeSleep: s.idleLockBeforeSleep
+    property alias idleWakeAfterSleep: s.idleWakeAfterSleep
+    property alias idleRespectInhibitors: s.idleRespectInhibitors
+    property alias idleWhileMedia: s.idleWhileMedia
+
+    property alias desktopSelection: s.desktopSelection
+    property alias desktopMenu: s.desktopMenu
+    property alias desktopIcons: s.desktopIcons
+    property alias desktopIconSize: s.desktopIconSize
+    property alias desktopIconsCorner: s.desktopIconsCorner
+    property alias desktopIconsSort: s.desktopIconsSort
+    property alias desktopIconsOpen: s.desktopIconsOpen
+    property alias desktopIconsThumbs: s.desktopIconsThumbs
+    property alias desktopIconsHidden: s.desktopIconsHidden
+    property alias desktopIconsHideExt: s.desktopIconsHideExt
+    property alias desktopIconsHome: s.desktopIconsHome
+    property alias desktopIconsTrash: s.desktopIconsTrash
+    property alias desktopIconsDrives: s.desktopIconsDrives
+    property alias desktopIconsShown: s.desktopIconsShown
+    property alias desktopIconsAutoArrange: s.desktopIconsAutoArrange
+    property alias desktopIconsSortDesc: s.desktopIconsSortDesc
+    property alias desktopIconsSpring: s.desktopIconsSpring
+    property alias desktopKeys: s.desktopKeys
+    property alias desktopIconSpacing: s.desktopIconSpacing
+    property alias shotPreview: s.shotPreview
+    property alias shotPreviewSeconds: s.shotPreviewSeconds
+    property alias shotFolder: s.shotFolder
+    property alias shotSaveFile: s.shotSaveFile
+    property alias shotRoundWindows: s.shotRoundWindows
+    property alias shotLoupe: s.shotLoupe
+    property alias shotOcrLang: s.shotOcrLang
+    property alias recordFolder: s.recordFolder
+    property alias recordCountdown: s.recordCountdown
+    property alias recordFps: s.recordFps
+    property alias recordEncoder: s.recordEncoder
+    property alias osdCapsLock: s.osdCapsLock
+    property alias osdNumLock: s.osdNumLock
+
+    // one-shot: the machine's own gtk/qt/cursor settings are read in once
+    property alias envAdopted: s.envAdopted
+    property alias envCursorTheme: s.envCursorTheme
+    property alias envCursorSize: s.envCursorSize
+    property alias envCursorShadow: s.envCursorShadow
+    // an installed cursor theme instead of lucid's own pointer
+    property alias envLegacyCursor: s.envLegacyCursor
+    // how lucid's own pointer takes the palette: an id from Pointer.styles
+    property alias envCursorStyle: s.envCursorStyle
+    // lucid's own pointer set while legacy cursors are off: an id from Pointer.sets
+    property alias envCursorSet: s.envCursorSet
+    property alias envIconTheme: s.envIconTheme
+    property alias envLegacyIcons: s.envLegacyIcons
+    // lucid's own icon set while legacy icons are off: an id from LucidIcons.sets
+    property alias envIconSet: s.envIconSet
+    property alias envGtkTheme: s.envGtkTheme
+    property alias envQtStyle: s.envQtStyle
+    property alias envQtPlatformTheme: s.envQtPlatformTheme
+    property alias envColorScheme: s.envColorScheme
+    property alias envFontSync: s.envFontSync
+    property alias envAppFont: s.envAppFont
+    property alias envAppFontSize: s.envAppFontSize
+    property alias envDocumentFont: s.envDocumentFont
+    property alias envDocumentFontSize: s.envDocumentFontSize
+    property alias envMonoFont: s.envMonoFont
+    property alias envMonoFontSize: s.envMonoFontSize
+    property alias envApplyGtk: s.envApplyGtk
+    property alias envApplyQt: s.envApplyQt
+    property alias envApplyHypr: s.envApplyHypr
+    property alias clockShowSeconds: s.clockShowSeconds
+    property alias clockShowWeather: s.clockShowWeather
+    property alias clockShowTimer: s.clockShowTimer
+    property alias clockWorldZones: s.clockWorldZones
+    property alias pomodoroFocus: s.pomodoroFocus
+    property alias pomodoroShort: s.pomodoroShort
+    property alias pomodoroLong: s.pomodoroLong
+    property alias pomodoroRounds: s.pomodoroRounds
+    property alias pomodoroAutoStart: s.pomodoroAutoStart
+    property alias pomodoroAutoFocus: s.pomodoroAutoFocus
+    property alias pomodoroRepeat: s.pomodoroRepeat
+    property alias pomodoroSilence: s.pomodoroSilence
+    property alias pomodoroGoal: s.pomodoroGoal
+    property alias timerSound: s.timerSound
+    property alias reminderSound: s.reminderSound
+    property alias weekStartMonday: s.weekStartMonday
+    property alias units: s.units
+    property alias launcherSearchEngine: s.launcherSearchEngine
+    property alias launcherWebRow: s.launcherWebRow
+    property alias launcherWindows: s.launcherWindows
+    property alias launcherAppActions: s.launcherAppActions
+    property alias launcherAppDescriptions: s.launcherAppDescriptions
+    property alias launcherPowerSearch: s.launcherPowerSearch
+    property alias launcherAddressFirst: s.launcherAddressFirst
+    property alias launcherPowerChips: s.launcherPowerChips
+    property alias launcherPowerButtons: s.launcherPowerButtons
+    property alias launcherWidth: s.launcherWidth
+    property alias launcherSearchPosition: s.launcherSearchPosition
+    property alias launcherDensity: s.launcherDensity
+    property alias launcherModeBar: s.launcherModeBar
+    property alias launcherActionHints: s.launcherActionHints
+    property alias launcherFrequentFirst: s.launcherFrequentFirst
+    property alias launcherCalculator: s.launcherCalculator
+    property alias launcherSettingsResults: s.launcherSettingsResults
+    property alias launcherContentScale: s.launcherContentScale
+    property alias launcherHiddenApps: s.launcherHiddenApps
+
+    // the launcher's m3 metrics, read by the dock's geometry and the face alike
+    // how large the launcher draws itself, apart from the shell-wide font scale
+    readonly property real launcherScale: Math.max(0.8, Math.min(1.4, root.launcherContentScale)) * Theme.uiScale
+    readonly property int launcherBaseWidth: root.launcherWidth === "compact" ? 460 : (root.launcherWidth === "wide" ? 680 : 560)
+    readonly property int launcherPanelWidth: Math.round(root.launcherBaseWidth * root.launcherScale)
+    readonly property bool launcherDense: root.launcherDensity === "compact"
+    readonly property bool launcherSearchTop: root.launcherSearchPosition === "top"
+    // m3 list item container heights, one line and two
+    readonly property int launcherRowOne: Math.round((root.launcherDense ? 48 : 56) * root.launcherScale)
+    readonly property int launcherRowTwo: Math.round((root.launcherDense ? 62 : 72) * root.launcherScale)
+    readonly property int launcherRowHeader: Math.round((root.launcherDense ? 32 : 38) * root.launcherScale)
+    // the calculator's answer takes a display-type hero rather than a list row
+    readonly property int launcherRowCalc: Math.round((root.launcherDense ? 84 : 96) * root.launcherScale)
+    // m3 ItemLeadingAvatarSize, the slot every kind of leading element shares.
+    // a compact row at a small content size is shorter than 40dp, so it caps
+    readonly property int launcherLeadSlot: Math.max(Theme.dp(24), Math.min(Math.round(40 * root.launcherScale), root.launcherRowOne - Theme.dp(8)))
+    readonly property int launcherEdgeSpace: Math.round(16 * root.launcherScale)
+    readonly property int launcherBetweenSpace: Math.round(12 * root.launcherScale)
+    readonly property int launcherRowGap: root.launcherDense ? Theme.dp(2) : Theme.dp(4)
+    readonly property int launcherListPad: Theme.dp(8)
+    // m3 search bar container height
+    readonly property int launcherSearchH: Math.round(56 * root.launcherScale)
+    // the head band: the mark, the mode set and the count
+    readonly property int launcherHeadH: Math.round(38 * root.launcherScale)
+    readonly property int launcherHeadGap: Math.round(10 * root.launcherScale)
+    readonly property int launcherContentGap: Theme.dp(12)
+
+    readonly property int launcherChromeH: root.launcherSearchH + (root.launcherModeBar ? root.launcherHeadH + root.launcherHeadGap : 0) + root.launcherContentGap
+
+    // every settings page, for the app's rail and for the launcher's search
+    // Scy-Shell v2.0 Unified Studio: ONLY the 15 user-intent Studio sections appear in
+    // the navigation rail; all specialized interactive sub-workbenches remain addressable
+    // via deep-links and global search with "hidden": true (zero divided provider UI, zero lost features).
+    readonly property var settingsPages: [
+        { "key": "01-personalization", "icon": "palette", "keys": "personalization theme colour color wallpaper matugen oklch harmony font cursor icons looks wallgen", "group": I18n.tr("Appearance & Identity"), "label": I18n.tr("01 Personalization"), "title": I18n.tr("01 — Personalization"), "blurb": I18n.tr("Dynamic Design Engine palettes, wallpapers, 20 architectural Looks, typography, icons and cursors") },
+        { "key": "02-desktop", "icon": "toolbar", "keys": "desktop bar statusbar dynamic island pills workspaces launcher desktop icons", "group": I18n.tr("Appearance & Identity"), "label": I18n.tr("02 Desktop"), "title": I18n.tr("02 — Desktop Experience"), "blurb": I18n.tr("Status bar silhouette, Scy Dynamic Island capsule, workspace pills, launcher and desktop canvas") },
+        { "key": "03-dock", "icon": "dock_to_bottom", "keys": "dock studio island notch split rail placement icons magnify autohide dodge groups separators recents", "group": I18n.tr("Appearance & Identity"), "label": I18n.tr("03 Dock Studio"), "title": I18n.tr("03 — Dock Studio"), "blurb": I18n.tr("Single-owner Dock Studio: styles, placement, glass material, magnification, dodge policy, groups and recents") },
+        { "key": "04-visual-effects", "icon": "blur_on", "keys": "effects glass blur kawase opacity translucency border shadow glow shader spring motion animation", "group": I18n.tr("Appearance & Identity"), "label": I18n.tr("04 Visual Effects"), "title": I18n.tr("04 — Visual Effects"), "blurb": I18n.tr("Frosted Kawase glass, Liquid Crystal refraction, blur passes, shadows, shaders and spring physics") },
+        { "key": "05-layout", "icon": "space_dashboard", "keys": "layout composer spatial scale radius margin padding anchor multi monitor", "group": I18n.tr("Composition & Workspace"), "label": I18n.tr("05 Layout"), "title": I18n.tr("05 — Layout & Composition"), "blurb": I18n.tr("Scy Layout Composer presets, UI & corner-radius scale, outer margins and multi-monitor shell policy") },
+        { "key": "06-widgets", "icon": "widgets", "keys": "widgets component lab cards clock weather calendar media telemetry pomodoro", "group": I18n.tr("Composition & Workspace"), "label": I18n.tr("06 Widgets"), "title": I18n.tr("06 — Widgets & Components"), "blurb": I18n.tr("Ambient desktop widget boards, Scy Component Laboratory materials and 89 WASM extensions") },
+        { "key": "07-windows", "icon": "select_window", "keys": "windows hyprland 0.57 gaps borders rounding tiling dwindle master dim overview scratchpad", "group": I18n.tr("Composition & Workspace"), "label": I18n.tr("07 Windows"), "title": I18n.tr("07 — Window Management"), "blurb": I18n.tr("Hyprland 0.57+ tiling, gaps, rounding, inactive dimming, workspace overview and scratchpads") },
+        { "key": "08-interactions", "icon": "keyboard", "keys": "interactions keybinds shortcuts hotkeys gestures touchpad mouse pointer hot corners", "group": I18n.tr("Composition & Workspace"), "label": I18n.tr("08 Interactions"), "title": I18n.tr("08 — Interactions"), "blurb": I18n.tr("Keyboard shortcuts, collision checker, trackpad gestures, pointer feel and 4-corner hot actions") },
+        { "key": "09-notifications", "icon": "notifications", "keys": "notifications control center quick settings dnd quiet hours toasts osd", "group": I18n.tr("System & Security"), "label": I18n.tr("09 Control Center"), "title": I18n.tr("09 — Notifications & Control Center"), "blurb": I18n.tr("Quick Settings tile grid, system toggles, Do Not Disturb, toast popups and volume/brightness OSD") },
+        { "key": "10-system-hardware", "icon": "memory", "keys": "system hardware performance battery vrr displays refresh audio sound wifi bluetooth power idle storage", "group": I18n.tr("System & Security"), "label": I18n.tr("10 System & Perf"), "title": I18n.tr("10 — System & Hardware"), "blurb": I18n.tr("Scy Intelligent Performance Advisor, displays, PipeWire audio, network, Bluetooth, power and storage") },
+        { "key": "11-lock-screen", "icon": "lock", "keys": "lock screen session pam privacy clock blur backdrop", "group": I18n.tr("System & Security"), "label": I18n.tr("11 Lock Screen"), "title": I18n.tr("11 — Lock Screen"), "blurb": I18n.tr("Strictly independent in-session Wayland lock screen layout, clock typography, privacy and backdrop") },
+        { "key": "12-login", "icon": "badge", "keys": "login greeter sddm greetd preauth users avatar session picker", "group": I18n.tr("System & Security"), "label": I18n.tr("12 Login"), "title": I18n.tr("12 — Login Experience"), "blurb": I18n.tr("Independent pre-session SDDM & Greetd login appearance, user cards and session selector") },
+        { "key": "13-productivity", "icon": "bolt", "keys": "productivity calculator unit converter focus timer pomodoro notes clipboard ocr screenshot ai games", "group": I18n.tr("Workflow & Advanced"), "label": I18n.tr("13 Productivity"), "title": I18n.tr("13 — Applications & Productivity"), "blurb": I18n.tr("Calculator & unit converter, Focus timer, Quick Notes, OCR captures, Local AI and 3D Game Shelf") },
+        { "key": "14-profiles", "icon": "style", "keys": "profiles presets minimal productivity immersive gaming creative cinema balanced custom export import", "group": I18n.tr("Workflow & Advanced"), "label": I18n.tr("14 Profiles"), "title": I18n.tr("14 — Profiles & Presets"), "blurb": I18n.tr("Complete desktop profiles (Balanced, Minimal, Productivity, Immersive, Gaming, Creative, Cinema + Custom)") },
+        { "key": "15-advanced", "icon": "tune", "keys": "advanced backup restore snapshot doctor conflicts persistence migration vault 2026 settings", "group": I18n.tr("Workflow & Advanced"), "label": I18n.tr("15 Advanced"), "title": I18n.tr("15 — Advanced Configuration"), "blurb": I18n.tr("Snapshot backups, persistence diagnostics, conflict scanner, Hyprland 0.57+ sync and 2,026-setting vault") },
+        { "key": "scy-providers", "icon": "hub", "keys": "scy routing", "group": "", "label": I18n.tr("Subsystem Routing"), "title": I18n.tr("Subsystem Routing"), "blurb": I18n.tr("Advanced runtime subsystem routing"), "hidden": true },
+        { "key": "scy-looks", "icon": "auto_awesome_mosaic", "keys": "looks moods", "group": "", "label": I18n.tr("Looks (20)"), "title": I18n.tr("Visual Identity & 20 Looks"), "blurb": I18n.tr("20 architectural Looks and 28-app theming"), "hidden": true },
+        { "key": "scy-wallgen", "icon": "wallpaper", "keys": "wallgen procedural aurora topographic bauhaus voronoi flow field waves starfield", "group": "", "label": I18n.tr("Wallgen"), "title": I18n.tr("Procedural Wallgen Studio"), "blurb": I18n.tr("Generate 13 styles of algorithmic palette-seeded wallpapers"), "hidden": true },
+        { "key": "scy-plugins", "icon": "extension", "keys": "plugins wasm wasmtime docker tailscale pomodoro prayer weather ports git", "group": "", "label": I18n.tr("Plugins (89)"), "title": I18n.tr("Plugins & WASM Host"), "blurb": I18n.tr("All 89 built-in plugins and sandboxed wasm32-wasip2 extensions"), "hidden": true },
+        { "key": "scy-ai", "icon": "psychology", "keys": "ai local llm functiongemma qwen whisper voice agent games steam lutris caldav", "group": "", "label": I18n.tr("AI & Shelf"), "title": I18n.tr("Local AI Agent & Game Shelf"), "blurb": I18n.tr("Offline natural-language shell control, CalDAV sync and 3D Steam/Lutris/Heroic launcher"), "hidden": true },
+        { "key": "scy-preauth", "icon": "badge", "keys": "sddm greetd greeter login display manager preauth", "group": "", "label": I18n.tr("Login & DM"), "title": I18n.tr("Display Manager & Greeter"), "blurb": I18n.tr("Coordinate SDDM and greetd configurations safely"), "hidden": true },
+        { "key": "scy-conflicts", "icon": "health_and_safety", "keys": "conflicts doctor diagnostics backup restore dbus waybar mako dunst", "group": "", "label": I18n.tr("Conflicts & Doctor"), "title": I18n.tr("Conflict Inspector & Doctor"), "blurb": I18n.tr("Pre-flight exclusive resource scanner, system diagnostics and snapshot backups"), "hidden": true },
+        { "key": "scy-vault", "icon": "tune", "keys": "vault all 2026 settings registry", "group": "", "label": I18n.tr("All 2,026 Settings"), "title": I18n.tr("Unified 2,026-Setting Registry"), "blurb": I18n.tr("Complete searchable inspector for all 2,026 Scy-Shell settings"), "hidden": true },
+        { "key": "users", "icon": "account_circle", "keys": "user account password avatar login admin sudo", "group": "", "label": I18n.tr("Account"), "title": I18n.tr("Users and Accounts"), "blurb": I18n.tr("Who may sign in to this machine, what they are called and what they are allowed to do"), "hidden": true },
+        { "key": "general", "icon": "tune", "keys": "style islands notches osd accent darkness surface tint motion animation speed font scale typography interface size zoom smaller bigger density", "group": "", "label": I18n.tr("General"), "title": I18n.tr("General"), "blurb": I18n.tr("Size, shape, colour and motion across the whole shell"), "hidden": true },
+        { "key": "glass", "icon": "blur_on", "keys": "blur transparency opacity translucent frosted kitty terminal windows", "group": "", "label": I18n.tr("Glass"), "title": I18n.tr("Glass"), "blurb": I18n.tr("How far the desktop shows through the shell, the terminal and your windows"), "hidden": true },
+        { "key": "theme", "icon": "palette", "keys": "colour color scheme wallpaper picker arrow keys live video animated mp4 decoder matugen pywal catppuccin gruvbox nord dark light mode import", "group": "", "label": I18n.tr("Theme"), "title": I18n.tr("Theme and Appearance"), "blurb": I18n.tr("Colour schemes, wallpapers and themes you import"), "hidden": true },
+        { "key": "colours", "icon": "format_color_fill", "keys": "matugen style scheme contrast your colour hex picker templates apps render variables", "group": "", "label": I18n.tr("Colours"), "title": I18n.tr("Colours"), "blurb": I18n.tr("How Matugen and Your colour build a palette, the applications that follow it, and templates of your own"), "hidden": true },
+        { "key": "palettes", "icon": "colors", "keys": "gallery schemes base16 base24 tinted import repo file editor export", "group": "", "label": I18n.tr("Palettes"), "title": I18n.tr("Palettes"), "blurb": I18n.tr("A gallery of colour schemes, and themes from a repo or a file"), "hidden": true },
+        { "key": "environment", "icon": "format_paint", "keys": "cursor icons icon set gravity simplified flat legacy gtk qt fonts application theme", "group": "", "label": I18n.tr("Environment"), "title": I18n.tr("Environment"), "blurb": I18n.tr("Cursors, icons, fonts and application themes, across GTK, Qt and Hyprland alike"), "hidden": true },
+        { "key": "bar", "icon": "toolbar", "keys": "status height margin spacing modules workspaces clock media tray system popup full hover auto-hide autohide corners edit mode arrange move drag join", "group": "", "label": I18n.tr("Bar"), "title": I18n.tr("Bar"), "blurb": I18n.tr("The status bar, its modules and how they open"), "toggle": "barEnabled", "hidden": true },
+        { "key": "dock", "icon": "dock_to_bottom", "keys": "icons size magnify autohide dynamic hiding pinned running indicators tooltips windows notch radius corners rounding padding inset edit mode move handle", "group": "", "label": I18n.tr("Dock"), "title": I18n.tr("Dock"), "blurb": I18n.tr("The dock, its icons and how it behaves"), "toggle": "dockEnabled", "hidden": true },
+        { "key": "launcher", "icon": "search", "keys": "launcher search spotlight apps results width density rows chips modes prefix engine web emoji run clipboard calculator frequent recent", "group": "", "label": I18n.tr("Launcher"), "title": I18n.tr("Launcher"), "blurb": I18n.tr("The search panel the dock opens into: how wide it is, how its results read, and what it looks through"), "hidden": true },
+        { "key": "widgets", "icon": "widgets", "keys": "desktop cards clock calendar weather presets layouts panel edit mode", "group": "", "label": I18n.tr("Widgets"), "title": I18n.tr("Widgets"), "blurb": I18n.tr("Cards you place on the desktop and arrange yourself"), "toggle": "widgetsEnabled", "hidden": true },
+        { "key": "lockscreen", "icon": "lock", "keys": "lock screen clock layout preset widgets weather blur dim backdrop notifications media power message wallpaper", "group": "", "label": I18n.tr("Lock screen"), "title": I18n.tr("Lock Screen"), "blurb": I18n.tr("Session lock layout, widgets and backdrop"), "hidden": true },
+        { "key": "windows", "icon": "select_window", "keys": "hyprland gaps exclusive zone reserved distance shell bar dock borders border colour rounding corners shadow dim tiling layout dwindle master scrolling focus follow mouse cursor resize snap animations", "group": "", "label": I18n.tr("Windows"), "title": I18n.tr("Windows"), "blurb": I18n.tr("How Hyprland draws your windows, tiles them and hands them the focus"), "hidden": true },
+        { "key": "workspaces", "icon": "workspaces", "keys": "special scratchpad music chat todo sysmon", "group": "", "label": I18n.tr("Workspaces"), "title": I18n.tr("Special Workspaces"), "blurb": I18n.tr("Your music, chat, to-do list and a scratchpad, each one key away and gone again with the same key"), "hidden": true },
+        { "key": "capture", "icon": "screenshot_region", "keys": "screenshot screen capture lucidshot print region window record recording video gif ocr text colour color picker pin pinned markup annotate edit folder clipboard countdown encoder frame rate", "group": "", "label": I18n.tr("Screenshots"), "title": I18n.tr("Screenshots and Recording"), "blurb": I18n.tr("What a capture leaves behind, where it goes, and how the screen recorder works"), "hidden": true },
+        { "key": "keybinds", "icon": "keyboard", "keys": "shortcuts hotkeys keys bindings hyprland super binds", "group": "", "label": I18n.tr("Keybinds"), "title": I18n.tr("Keybinds"), "blurb": I18n.tr("Every Hyprland shortcut: change one, switch it off or add your own"), "hidden": true },
+        { "key": "input", "icon": "mouse", "keys": "keyboard layout layouts xkb caps lock repeat numlock mouse pointer speed acceleration touchpad tap natural scroll gestures swipe", "group": "", "label": I18n.tr("Input"), "title": I18n.tr("Input"), "blurb": I18n.tr("Keyboard layouts and key repeat, the mouse, the touchpad and its gestures"), "hidden": true },
+        { "key": "displays", "icon": "desktop_windows", "keys": "monitor screen resolution refresh rate scale vrr arrangement", "group": "", "label": I18n.tr("Displays"), "title": I18n.tr("Displays"), "blurb": I18n.tr("Every screen this machine has: resolution, refresh rate, scale, how they are arranged and which one the shell sits on"), "hidden": true },
+        { "key": "sound", "icon": "volume_up", "keys": "audio volume speakers microphone output input devices combined several multiple outputs at once system sounds chime usb bluetooth charger battery screenshot camera", "group": "", "label": I18n.tr("Sound"), "title": I18n.tr("Sound"), "blurb": I18n.tr("Which speakers play and which microphone listens, what each application is using, and how loud any of it is"), "hidden": true },
+        { "key": "network", "icon": "wifi", "keys": "wifi ethernet vpn dns ip proxy internet", "group": "", "label": I18n.tr("Network"), "title": I18n.tr("Network"), "blurb": I18n.tr("Wi-Fi, wired, VPN and how this machine gets its address"), "hidden": true },
+        { "key": "bluetooth", "icon": "bluetooth", "keys": "devices pair headphones", "group": "", "label": I18n.tr("Bluetooth"), "title": I18n.tr("Bluetooth and Devices"), "blurb": I18n.tr("The radio, what it is paired with, and the phone you connect to it"), "hidden": true },
+        { "key": "kdeconnect", "icon": "smartphone", "keys": "phone kde connect files notifications clipboard", "group": "", "label": I18n.tr("Phone"), "title": I18n.tr("Phone"), "blurb": I18n.tr("Your phone on this machine over KDE Connect: files, notifications, clipboard and a remote"), "toggle": "kdeConnectEnabled", "hidden": true },
+        { "key": "startup", "icon": "start", "keys": "autostart login apps open at login run startup environment variables env xdg session", "group": "", "label": I18n.tr("Startup"), "title": I18n.tr("Startup"), "blurb": I18n.tr("Apps opened when you log in, system autostart and environment variables"), "hidden": true },
+        { "key": "language", "icon": "language", "keys": "language idioma translation translate locale import export json español spanish", "group": "", "label": I18n.tr("Language"), "title": I18n.tr("Language"), "blurb": I18n.tr("The language of the shell, and adding or sharing a translation"), "hidden": true },
+        { "key": "notifications", "icon": "notifications", "keys": "popups toasts do not disturb dnd quiet hours sound muted apps caps lock num lock microphone", "group": "", "label": I18n.tr("Notifications"), "title": I18n.tr("Notifications"), "blurb": I18n.tr("Popups, quiet hours, sound and which applications may interrupt you"), "toggle": "barNotifications", "hidden": true },
+        { "key": "idle", "icon": "bedtime", "keys": "sleep suspend lock dim screen off hypridle caffeine", "group": "", "label": I18n.tr("Idle"), "title": I18n.tr("Idle and Sleep"), "blurb": I18n.tr("What happens when you walk away: dimming, locking, screen off and suspend"), "toggle": "idleEnabled", "hidden": true },
+        { "key": "datetime", "icon": "schedule", "keys": "clock time zone location 24 hour seconds week monday sunday units metric imperial celsius fahrenheit temperature wind mph timer pomodoro focus break alarm world", "group": "", "label": I18n.tr("Date & Time"), "title": I18n.tr("Date and Time"), "blurb": I18n.tr("Where you are, the clock, and its timers"), "hidden": true },
+        { "key": "storage", "icon": "hard_drive", "keys": "disk space storage usage free full clean cleanup cache trash duplicates large files drives ssd health smart trim mount", "group": "", "label": I18n.tr("Storage"), "title": I18n.tr("Storage"), "blurb": I18n.tr("What fills your drives, what could go, and the drives themselves"), "hidden": true },
+        { "key": "about", "icon": "info", "keys": "version update upgrade install release beta restart scy", "group": "", "label": I18n.tr("About"), "title": I18n.tr("About Scy-Shell"), "blurb": I18n.tr("Scy-Shell v2.0.0"), "hidden": true },
+        { "key": "systeminfo", "icon": "computer", "keys": "system about device hardware software os operating kernel architecture cpu processor gpu graphics memory ram storage disk packages uptime host hostname session desktop compositor quickshell", "group": "", "label": I18n.tr("About system"), "title": I18n.tr("About system"), "blurb": I18n.tr("Hardware, operating system and session details"), "hidden": true }
+    ]
+
+    function settingsPage(key) {
+        for (var i = 0; i < root.settingsPages.length; i++) {
+            if (root.settingsPages[i].key === key)
+                return root.settingsPages[i];
+
+        }
+        return null;
+    }
+
+    readonly property var builtinThemes: [
+        { "id": "matugen", "name": I18n.tr("Matugen"), "desc": I18n.tr("Colors generated from your wallpaper"), "swatchBg": "#12171a", "swatchAccent": "#8ad0ee" },
+        { "id": "pywal", "name": I18n.tr("Pywal"), "desc": I18n.tr("Wallpaper colors via pywal's classic palette"), "swatchBg": "#1a1e24", "swatchAccent": "#c9a1a9" },
+        { "id": "catppuccin-mocha", "name": I18n.tr("Catppuccin Mocha"), "desc": I18n.tr("Soothing pastel dark theme"), "swatchBg": "#1e1e2e", "swatchAccent": "#89b4fa" },
+        { "id": "gruvbox", "name": I18n.tr("Gruvbox"), "desc": I18n.tr("Retro groove warm palette"), "swatchBg": "#282828", "swatchAccent": "#83a598" },
+        { "id": "nightfox", "name": I18n.tr("Nightfox"), "desc": I18n.tr("Deep navy with muted blue accents"), "swatchBg": "#192330", "swatchAccent": "#719cd6" },
+        { "id": "nord", "name": I18n.tr("Nord"), "desc": I18n.tr("Arctic blue-grey palette"), "swatchBg": "#232831", "swatchAccent": "#88c0d0" },
+        { "id": "tokyo-night", "name": I18n.tr("Tokyo Night"), "desc": I18n.tr("Dark blues and violets"), "swatchBg": "#1a1b26", "swatchAccent": "#7aa2f7" },
+        { "id": "colour", "name": I18n.tr("Your colour"), "desc": I18n.tr("A palette built from one colour you pick"), "swatchBg": "#14121a", "swatchAccent": root.themeColour, "removable": true }
+    ]
+    // themes imported from a scheme repo, read back from their meta.json
+    property var userThemes: []
+    // the order the user dragged them into; anything it does not name keeps its
+    // natural place at the end, so a freshly imported theme still shows up
+    readonly property var themeCatalogue: {
+        var hidden = root.splitList(root.hiddenThemes);
+        var all = root.builtinThemes.filter((t) => {
+            return hidden.indexOf(t.id) === -1;
+        }).concat(root.userThemes);
+        var order = root.themeOrder.split(",").filter((x) => {
+            return x !== "";
+        });
+        if (order.length === 0)
+            return all;
+
+        var left = {};
+        for (var i = 0; i < all.length; i++) left[all[i].id] = all[i];
+        var out = [];
+        for (var j = 0; j < order.length; j++) {
+            if (left[order[j]]) {
+                out.push(left[order[j]]);
+                delete left[order[j]];
+            }
+        }
+        for (var k = 0; k < all.length; k++) {
+            if (left[all[k].id])
+                out.push(all[k]);
+
+        }
+        return out;
+    }
+
+    function setThemeOrder(ids) {
+        root.themeOrder = ids.join(",");
+    }
+
+    function setThemeHidden(id, on) {
+        var list = root.splitList(root.hiddenThemes).filter((x) => {
+            return x !== id;
+        });
+        if (on)
+            list.push(id);
+
+        var v = list.join(",");
+        if (v !== root.hiddenThemes)
+            root.hiddenThemes = v;
+
+    }
+
+    // a built-in theme leaves the list; the palette on screen steps back to
+    // the wallpaper's if it came from that theme
+    function removeBuiltinTheme(id) {
+        if (root.currentTheme === id)
+            root.themeChangeRequested("matugen");
+
+        root.setThemeHidden(id, true);
+    }
+
+    // using a removed theme again puts it back
+    onThemeChangeRequested: (id) => {
+        return root.setThemeHidden(id, false);
+    }
+
+    readonly property var defaults: ({
+        "barStyle": "island",
+        "barPosition": "top",
+        "dockStyle": "island",
+        "accentPunch": 1,
+        "surfaceDarkness": -1,
+        "surfaceTint": -1,
+        "motionScale": 1,
+        "jellyMotion": true,
+        "jellyAmount": 1,
+        "fontFamily": "Google Sans",
+        "fontScale": 1,
+        "uiScale": 1,
+        "language": "auto",
+        "cornerScale": 1,
+        "shellGap": 0,
+        "wallpaperFolder": "",
+        "wallpaperPickerStyle": "strip",
+        "wallpaperPickerKeys": "sides",
+        "liveWallpapers": true,
+        "liveDecoder": "auto",
+        "livePauseUnder": "fullscreen",
+        "liveGameMode": "pause",
+        "wallpaperPillsShape": "uniform",
+        "wallpaperStripSteps": "normal",
+        "wallpaperStripSides": 2,
+        "wallpaperTilesRows": 2,
+        "wallpaperTilesAspect": "square",
+        "wallpaperBentoHero": "medium",
+        "wallpaperBentoPrev": true,
+        "wallTransType": "fade",
+        "wallTransDuration": 1,
+        "wallTransAngle": 45,
+        "wallTransOrigin": "center",
+        "wallTransBezier": ".54,0,.34,.99",
+        "wallTransWave": "20,20",
+        "wallTransPreset": "soft",
+        "wallTransCustomPresets": "",
+        "themeOrder": "",
+        "hiddenThemes": "",
+        "matugenScheme": "scheme-tonal-spot",
+        "matugenContrast": 0,
+        "matugenSourceImage": "",
+        "matugenSourceIndex": 0,
+        "themeColour": "#6750a4",
+        "barEnabled": true,
+        "barPopupMode": false,
+        "barPopupGap": 10,
+        "barPopupNotched": false,
+        "barHeight": 35,
+        "barContentScale": 1,
+        "barTopMargin": 22,
+        "barSideMargin": 17,
+        "barSpacing": 8,
+        "barHoverGrow": 3,
+        "autoColorMode": false,
+        "barZoneGap": 26,
+        "systemTiles": "dnd,awake,dark,airplane,location,mic,capture,record,picker,keyboard,timer,session",
+        "systemTilesRadios": false,
+        "systemBigTiles": "wifi,bluetooth",
+        "systemBlocks": "sliders,bigtiles,tiles,media,gauges",
+        "systemSliders": "brightness,volume",
+        "systemInfo": "cpu,ram,disk,battery",
+        "systemGrid": "",
+        "systemBlockCards": false,
+        "systemOwnTiles": "",
+        "systemBlockStyles": "",
+        "systemHeaderButtons": "edit,settings,lock,power",
+        "barLayout": "{\"left\":[\"workspaces\",\"media\",\"tray\"],\"center\":[\"clock\"],\"right\":[\"notifications\",\"system\"]}",
+        "barJoins": "[]",
+        "barJoinDividers": true,
+        "showWorkspaces": true,
+        "showMedia": true,
+        "showTray": true,
+        "showKbLayout": true,
+        "systemBarItems": "wifi,bluetooth,volume,level,mic,battery",
+        "gameModeOnCmd": "",
+        "gameModeOffCmd": "",
+        "gameModeStatusCmd": "",
+        "showClock": true,
+        "showNotifications": true,
+        "showSystem": true,
+        "showPrivacy": false,
+        "privacyWatch": "mic,camera,screen",
+        "privacyToast": true,
+        "privacyAlwaysShown": false,
+        "privacyStyle": "marks",
+        "showPower": false,
+        "powerModuleActions": "lock,suspend,hibernate,logout,reboot,shutdown",
+        "powerModuleConfirm": true,
+        "powerModuleUptime": true,
+        "powerModuleStyle": "icon",
+        "powerModulePanelStyle": "list",
+        "showWindow": false,
+        "windowModuleText": "title",
+        "windowModuleWidth": 260,
+        "windowModuleScroll": true,
+        "windowModuleMiddleClose": false,
+        "showStart": false,
+        "startModuleStyle": "grid",
+        "showApps": false,
+        "workspacesByDisplay": true,
+        "audioMeters": true,
+        "clockStyle": "accent",
+        "clockDateFormat": "dayMonth",
+        "mediaStyle": "disc",
+        "mediaPanelStyle": "side",
+        "mediaHideIdle": false,
+        "mediaArtist": true,
+        "mediaTitleWidth": 170,
+        "mediaPlayButton": true,
+        "mediaWheelVolume": true,
+        "mediaLyrics": true,
+        "workspacesStyle": "dots",
+        "workspacesShown": 6,
+        "workspacesWheel": true,
+        "workspacesLegacy": false,
+        "notificationsStyle": "badge",
+        "trayStyle": "collapsed",
+        "trayIconColor": "original",
+        "trayHidden": "",
+        "clock24h": false,
+        "lockPreset": "centre",
+        "lockSlots": "",
+        "lockWidgetOpts": "",
+        "lockBlur": 50,
+        "lockDim": 40,
+        "lockTint": true,
+        "lockDive": true,
+        "lockIdleBack": 25,
+        "lockOtherScreens": "clock",
+        "lockLoginWeather": true,
+        "lockLoginSync": false,
+        "clockShowDate": true,
+        "gpsEnabled": false,
+        "locationName": "",
+        "locationLabel": "",
+        "locationLat": 52.4083,
+        "locationLon": 16.9336,
+        "nightLight": false,
+        "nightLightTemp": 4000,
+        "nightLightSchedule": "off",
+        "nightLightFrom": 1260,
+        "nightLightTo": 420,
+        "locationTz": "",
+        "timeZoneAuto": true,
+        "doNotDisturb": false,
+        "osdStyle": "island",
+        "osdDockMorph": true,
+        "osdToggles": "osd",
+        "toastTimeout": 5,
+        "toastOnLayout": true,
+        "toastOnGameMode": true,
+        "toastOnBattery": true,
+        "toastOnBluetooth": true,
+        "toastOnWifi": true,
+        "toastOnAudio": true,
+        "toastOnDisplays": true,
+        "toastOnPower": true,
+        "toastOnUsb": true,
+        "toastOnCamera": true,
+        "toastEnabled": true,
+        "toastUseAppTimeout": true,
+        "toastCriticalSticky": true,
+        "toastShowBody": true,
+        "toastShowActions": true,
+        "toastBodyLines": 4,
+        "notifShowIcons": true,
+        "notifMaxHistory": 50,
+        "dndAllowCritical": true,
+        "dndFullscreen": false,
+        "quietHours": false,
+        "quietFrom": 1320,
+        "quietTo": 420,
+        "notifSound": false,
+        "notifSoundName": "glint",
+        "notifSoundVolume": 0.6,
+        "notifSoundUrgentOnly": false,
+        "sysSounds": true,
+        "sysSoundVolume": 0.6,
+        "soundOnUsb": true,
+        "soundOnBluetooth": true,
+        "soundOnCharger": true,
+        "soundOnBattery": true,
+        "soundOnCapture": true,
+        "soundOnCamera": true,
+        "soundOnVolume": true,
+        "soundOnBrightness": true,
+        "soundOnCaps": true,
+        "soundOnMic": true,
+        "notifMutedApps": "",
+        "notifSeenApps": "",
+        "notifGrouping": true,
+        "notifTimestamps": true,
+        "notifProgress": true,
+        "notifInlineReply": true,
+        "toastMaxVisible": 3,
+        "dockEnabled": true,
+        "dockIconSize": 41,
+        "dockSpacing": 12,
+        "dockRadius": 40,
+        "dockIconPadding": 0,
+        "dockBottomMargin": 13,
+        "dockMagnify": true,
+        "dockHoverEffect": 1,
+        "barMotionScale": 1.35,
+        "barNotchFlare": 14,
+        "barFullCorner": 18,
+        "barNotchEdge": false,
+        "barHoverOpen": false,
+        "barAutoHide": false,
+        "dockNotchFlare": 14,
+        "dockSplitGap": 8,
+        "dockAutoHide": false,
+        "dockDynamicHide": false,
+        "dockShowIndicators": true,
+        "dockShowTooltips": true,
+        "dockShowRunning": true,
+        "dockIconTiles": false,
+        "clipboardEnabled": true,
+        "widgetsEnabled": true,
+        "widgetSnap": true,
+        "widgetLockAll": false,
+        "widgetHideFullscreen": false,
+        "widgetOnTop": false,
+        "btScanOnOpen": true,
+        "btShowUnnamed": false,
+        "btReceive": true,
+        "btAgent": true,
+        "btReceiveFolder": "",
+        "btReceiveAutoPaired": false,
+        "audioMoveStreams": true,
+        "audioCombine": "",
+        "kdeConnectEnabled": true,
+        "updateCheck": true,
+        "updateBeta": false,
+        "storageLowWarn": true,
+        "storageLowPercent": 10,
+        "storageTrashDays": 0,
+        "idleEnabled": false,
+        "idleAutostart": true,
+        "idleKeepAwake": false,
+        "idleAdopted": false,
+        "idleDim": true,
+        "idleDimAfter": 120,
+        "idleDimLevel": 10,
+        "idleDimKeyboard": true,
+        "idleLock": true,
+        "idleLockAfter": 600,
+        "idleScreenOff": true,
+        "idleScreenOffAfter": 900,
+        "idleSuspend": false,
+        "idleSuspendAfter": 1800,
+        "idleSuspendOnAc": false,
+        "idleLockBeforeSleep": true,
+        "idleWakeAfterSleep": true,
+        "idleRespectInhibitors": true,
+        "idleWhileMedia": true,
+        "desktopSelection": true,
+        "desktopMenu": true,
+        "desktopIcons": false,
+        "desktopIconSize": "medium",
+        "desktopIconsCorner": "left",
+        "desktopIconsSort": "name",
+        "desktopIconsOpen": "double",
+        "desktopIconsThumbs": true,
+        "desktopIconsHidden": false,
+        "desktopIconsHideExt": false,
+        "desktopIconsHome": false,
+        "desktopIconsTrash": true,
+        "desktopIconsDrives": true,
+        "desktopIconsShown": true,
+        "desktopIconsAutoArrange": false,
+        "desktopIconsSortDesc": false,
+        "desktopIconsSpring": true,
+        "desktopKeys": "{}",
+        "desktopIconSpacing": "normal",
+        "shotPreview": "preview",
+        "shotPreviewSeconds": 6,
+        "shotFolder": "",
+        "shotSaveFile": true,
+        "shotRoundWindows": true,
+        "shotLoupe": true,
+        "shotOcrLang": "eng",
+        "recordFolder": "",
+        "recordCountdown": 3,
+        "recordFps": 0,
+        "recordEncoder": "auto",
+        "osdCapsLock": true,
+        "osdNumLock": true,
+        "envAdopted": false,
+        "envCursorTheme": "",
+        "envCursorSize": 24,
+        "envCursorShadow": true,
+        "envLegacyCursor": false,
+        "envCursorStyle": "dark",
+        "envCursorSet": "nimbus",
+        "envIconTheme": "",
+        "envLegacyIcons": false,
+        "envIconSet": "gravity",
+        "envGtkTheme": "",
+        "envQtStyle": "Fusion", // i18n-skip
+        "envQtPlatformTheme": "",
+        "envColorScheme": "auto",
+        "envFontSync": false,
+        "envAppFont": "",
+        "envAppFontSize": 11,
+        "envDocumentFont": "",
+        "envDocumentFontSize": 11,
+        "envMonoFont": "",
+        "envMonoFontSize": 10,
+        "envApplyGtk": true,
+        "envApplyQt": true,
+        "envApplyHypr": true,
+        "specialScratchpad": true,
+        "specialMusic": true,
+        "specialComms": true,
+        "specialTodo": true,
+        "specialSysmon": true,
+        "specialMusicApps": "auto",
+        "specialCommsApps": "auto",
+        "specialTodoApps": "auto",
+        "specialSysmonApps": "auto",
+        "specialKeepApps": true,
+        "specialHideOnSwitch": false,
+        "specialDim": 0.2,
+        "specialBlur": false,
+        "specialGaps": 0,
+        "specialCustom": "[]",
+        "hyprOptions": "{}",
+        "pinBorder": "tertiary",
+        "pinBadge": "top-right",
+        "pinPulse": true,
+        "urgentBadge": "top-left",
+        "urgentPulse": true,
+        "startupApps": "[]",
+        "startupEnv": "[]",
+        "startupXdg": false,
+        "glassApps": "vscodium",
+        "glassValues": "vscodium=0.9",
+        "monitorSetups": "{}",
+        "monitorShellScreen": "",
+        "monitorBarScreen": "",
+        "monitorDockScreen": "",
+        "clockShowSeconds": false,
+        "clockShowWeather": true,
+        "clockShowTimer": true,
+        "clockWorldZones": "Europe/London,America/New_York,Asia/Tokyo",
+        "pomodoroFocus": 25,
+        "pomodoroShort": 5,
+        "pomodoroLong": 15,
+        "pomodoroRounds": 4,
+        "pomodoroAutoStart": true,
+        "pomodoroAutoFocus": true,
+        "pomodoroRepeat": true,
+        "pomodoroSilence": false,
+        "pomodoroGoal": 0,
+        "timerSound": true,
+        "reminderSound": true,
+        "weekStartMonday": true,
+        "units": "metric",
+        "launcherSearchEngine": "duckduckgo",
+        "launcherWebRow": true,
+        "launcherWindows": true,
+        "launcherAppActions": true,
+        "launcherAppDescriptions": false,
+        "launcherPowerSearch": true,
+        "launcherAddressFirst": true,
+        "launcherPowerChips": false,
+        "launcherPowerButtons": "lock,suspend,reboot,shutdown",
+        "launcherWidth": "standard",
+        "launcherSearchPosition": "bottom",
+        "launcherDensity": "compact",
+        "launcherModeBar": true,
+        "launcherActionHints": true,
+        "launcherFrequentFirst": true,
+        "launcherCalculator": true,
+        "launcherSettingsResults": true,
+        "launcherContentScale": 0.8,
+        "launcherHiddenApps": "",
+        "monitorWorkspaces": "{}"
+    })
+
+    // what the bar module is holding right now, so the settings page can offer
+    // to clear it; not persisted
+    property int liveNotifCount: 0
+
+    signal notificationsClearRequested()
+
+    signal pinnedResetRequested()
+    signal settingsRequested(string page)
+    // a page handing over to something on the desktop: the window steps aside
+    signal settingsHideRequested()
+    signal resetConfirmRequested(string title, string body, string confirmLabel, string action)
+    signal wallpaperDeleteRequested(string path)
+    signal desktopActionRequested(string action)
+    signal wallpapersChanged()
+
+    readonly property string resetAllToken: "__all__"
+    readonly property string resetDockToken: "__dock__"
+    readonly property string resetBlurToken: "__blur__"
+    readonly property string clearWidgetsToken: "__widgets__"
+    readonly property string clearClipboardToken: "__clipboard__"
+    readonly property string resetIdleToken: "__idle__"
+    readonly property string resetEnvToken: "__env__"
+    readonly property string resetSpecialsToken: "__specials__"
+    readonly property string resetGlassToken: "__glass__"
+    readonly property string resetMonitorsToken: "__monitors__"
+
+    signal themeChangeRequested(string id)
+
+    // a deliberate light/dark flip, as opposed to the cache file merely loading
+    signal colorModeApplied(string mode)
+
+    signal themeDeleteRequested(string id)
+
+    signal fontPickerRequested()
+    // the lock screen page's preview, asking the window to grow it into the editor
+    signal lockEditorRequested(var preview)
+
+    // "cursor" | "icon" | "gtk" | "qtStyle" | "appFont" | "docFont" | "monoFont"
+    signal envPickerRequested(string kind)
+
+    signal timeZonePickerRequested()
+
+    signal keyboardRequested()
+
+    // which special workspace the app being picked is going into
+    signal appPickerRequested(string workspace)
+
+    onAnyBarModuleEnabledChanged: {
+        if (!root.anyBarModuleEnabled && root.barEnabled)
+            root.barEnabled = false;
+
+    }
+
+    // emptying the bar switches it off, so putting the modules back has to
+    // switch it on again or the restore looks like it did nothing
+    function setBarDefaults() {
+        root.barReorderTick++;
+        root.resetKeys(root.barLayoutKeys.concat(root.barModuleKeys));
+        root.barEnabled = true;
+    }
+
+    // barLayout is JSON: {"left": [...], "center": [...], "right": [...]}, each
+    // list in order from the screen's left edge. a module it leaves out (a hand
+    // edit, a module added later) goes back to the end of its home group and an
+    // unknown or repeated id is skipped, so every module always has a place
+    function parseBarLayout(text) {
+        let parsed = null;
+        try {
+            parsed = JSON.parse(text);
+        } catch (e) {
+        }
+        const out = {
+            "left": [],
+            "center": [],
+            "right": []
+        };
+        const seen = {};
+        for (const side of ["left", "center", "right"]) {
+            const ids = parsed && Array.isArray(parsed[side]) ? parsed[side] : [];
+            for (const id of ids) {
+                if (root.barModuleHome[id] === undefined || seen[id])
+                    continue;
+
+                seen[id] = true;
+                out[side].push(id);
+            }
+        }
+        // one new to the arrangement goes to its home group: at the end, or at
+        // the start for one that belongs there (the start button)
+        for (const m of root.barModules) {
+            if (seen[m.id])
+                continue;
+
+            if (m.first)
+                out[m.home].unshift(m.id);
+            else
+                out[m.home].push(m.id);
+        }
+        return out;
+    }
+
+    function setBarLayout(groups) {
+        // before the write, or the x bindings re-evaluate before the bar knows
+        // this one is worth easing
+        root.barReorderTick++;
+        root.barLayout = JSON.stringify({
+            "left": groups.left,
+            "center": groups.center,
+            "right": groups.right
+        });
+    }
+
+    // modules joined into one island (or one notch), as "a+b" pairs in barJoins.
+    // a pair only counts while the two sit side by side in a group with both
+    // shown, so moving one away parts them without touching the list, and putting
+    // it back joins them again
+    readonly property var barJoinSet: root.parseBarJoins(root.barJoins)
+
+    function parseBarJoins(text) {
+        const out = ({});
+        let parsed = null;
+        try {
+            parsed = JSON.parse(text);
+        } catch (e) {
+        }
+        if (!Array.isArray(parsed))
+            return out;
+
+        for (const pair of parsed) {
+            if (typeof pair === "string" && pair.indexOf("+") > 0)
+                out[pair] = true;
+
+        }
+        return out;
+    }
+
+    function barJoined(a, b) {
+        return root.barJoinSet[a + "+" + b] === true || root.barJoinSet[b + "+" + a] === true;
+    }
+
+    // what the bar draws: every module already shares the full bar's one strip
+    function barJoinedNow(a, b) {
+        return !root.barFull && root.barJoined(a, b);
+    }
+
+    function setBarJoined(a, b, on) {
+        const keep = Object.keys(root.barJoinSet).filter((k) => {
+            return k !== a + "+" + b && k !== b + "+" + a;
+        });
+        if (on)
+            keep.push(a + "+" + b);
+
+        // the pills ease into their new places, as for any rearrangement
+        root.barReorderTick++;
+        root.barJoins = JSON.stringify(keep);
+    }
+
+    // on means the modules that ship switched on; one that ships off stays off
+    function setAllBarModules(v) {
+        for (const m of root.barModules)
+            root[m.key] = v && root.defaults[m.key] === true;
+    }
+
+    function setSurface(key, v) {
+        if (key === "barEnabled") {
+            if (v && !root.anyBarModuleEnabled)
+                root.setAllBarModules(true);
+
+            root.barEnabled = v;
+        } else if (key === "dockEnabled") {
+            if (root.surfaceLocked(key))
+                return ;
+
+            // set by hand, it stays as set when the bar moves
+            root.dockAsideForBar = false;
+            root.dockEnabled = v;
+        } else if (key === "widgetsEnabled") {
+            root.widgetsEnabled = v;
+        } else if (key === "kdeConnectEnabled") {
+            root.kdeConnectEnabled = v;
+        } else if (key === "barNotifications") {
+            root.setBarModuleShown("notifications", v);
+        } else if (key === "idleEnabled") {
+            root.idleEnabled = v;
+        }
+    }
+
+    function askReset(title, body, action) {
+        root.resetConfirmRequested(title, body, I18n.tr("Reset"), action);
+    }
+
+    // same dialog, different verb
+    function askConfirm(title, body, confirmLabel, action) {
+        root.resetConfirmRequested(title, body, confirmLabel, action);
+    }
+
+    function isModified(key) {
+        return root.defaults[key] !== undefined && root[key] !== root.defaults[key];
+    }
+
+    function resetAll() {
+        for (var k in root.defaults) root.set(k, root.defaults[k])
+    }
+
+    function resetKeys(keys) {
+        for (var i = 0; i < keys.length; i++) root.set(keys[i], root.defaults[keys[i]])
+    }
+
+    // a custom folder overrides every theme's own
+    function wallpaperDirFor(themeId) {
+        return root.wallpaperFolder !== "" ? root.wallpaperFolder : (Quickshell.env("HOME") + "/Pictures/wallpapers/" + themeId);
+    }
+
+    // must write through the alias — a bracket write on the adapter is dropped
+    function set(key, value) {
+        if (root.defaults[key] !== undefined && root[key] !== value)
+            root[key] = value;
+    }
+
+    // quiet hours, evaluated against a clock the caller owns so Prefs need not
+    // depend on Loc, which already depends on Prefs
+    function inQuietWindow(d) {
+        if (!root.quietHours)
+            return false;
+
+        if (root.quietFrom === root.quietTo)
+            return false;
+
+        var m = d.getHours() * 60 + d.getMinutes();
+        return root.quietFrom < root.quietTo ? (m >= root.quietFrom && m < root.quietTo) : (m >= root.quietFrom || m < root.quietTo);
+    }
+
+    function minutesText(m) {
+        return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+    }
+
+    // "22:00", "22.00", "2200" and "9" all land somewhere sensible
+    function parseMinutes(t) {
+        var m = String(t).trim().match(/^(\d{1,2})\s*[:.h]?\s*(\d{2})?$/);
+        if (!m)
+            return -1;
+
+        var h = parseInt(m[1], 10);
+        var mi = m[2] === undefined ? 0 : parseInt(m[2], 10);
+        if (h > 23 || mi > 59)
+            return -1;
+
+        return h * 60 + mi;
+    }
+
+    function splitList(v) {
+        return v.split(",").filter((x) => {
+            return x !== "";
+        });
+    }
+
+    readonly property var mutedApps: root.splitList(root.notifMutedApps)
+    // every app that has sent a notification since the list was last cleared, so
+    // the settings page can offer them instead of asking you to type a name
+    readonly property var seenApps: root.splitList(root.notifSeenApps)
+
+    // desktop-file ids the launcher leaves out. the scan itself already drops
+    // anything NoDisplay or shown only in another desktop; this is the rest,
+    // whatever you decided you never want to see
+    readonly property var hiddenLauncherApps: root.splitList(root.launcherHiddenApps)
+    // base -> display name, published by the dock's scan so the settings page
+    // can name what it is offering to bring back
+    property var launcherAppNames: ({})
+
+    function isLauncherHidden(base) {
+        return base !== "" && root.hiddenLauncherApps.indexOf(base) !== -1;
+    }
+
+    function setLauncherHidden(base, on) {
+        if (base === "")
+            return ;
+
+        var list = root.hiddenLauncherApps.filter((x) => {
+            return x !== base;
+        });
+        if (on)
+            list.push(base);
+
+        root.launcherHiddenApps = list.sort().join(",");
+    }
+
+    function launcherAppLabel(base) {
+        var n = root.launcherAppNames[base];
+        return n !== undefined && n !== "" ? n : base;
+    }
+
+    function isMuted(app) {
+        return app !== "" && root.mutedApps.indexOf(app) !== -1;
+    }
+
+    function setMuted(app, on) {
+        if (app === "")
+            return ;
+
+        var list = root.mutedApps.filter((x) => {
+            return x !== app;
+        });
+        if (on)
+            list.push(app);
+
+        root.notifMutedApps = list.join(",");
+    }
+
+    function noteApp(app) {
+        var name = String(app).replace(/,/g, " ").trim();
+        if (name === "" || root.seenApps.indexOf(name) !== -1)
+            return ;
+
+        var list = root.seenApps.concat([name]).sort((a, b) => {
+            return a.toLowerCase().localeCompare(b.toLowerCase());
+        });
+        root.notifSeenApps = list.slice(0, 60).join(",");
+    }
+
+    // imported themes live beside the shipped ones, so the catalogue is the
+    // built-in list plus whatever meta.json files are on disk
+    Process {
+        id: userThemeScan
+
+        command: ["python3", "-c", "import json,glob,os;print(json.dumps([json.load(open(f)) for f in sorted(glob.glob(os.path.expanduser('~/.config/lucid/themes/*/meta.json')))]))"]
+
+        stdout: StdioCollector {
+            onStreamFinished: {
+                try {
+                    root.userThemes = JSON.parse(text.trim() || "[]");
+                } catch (e) {
+                    root.userThemes = [];
+                }
+            }
+        }
+
+    }
+
+    function rescanThemes() {
+        userThemeScan.running = false;
+        userThemeScan.running = true;
+    }
+
+    Component.onCompleted: root.rescanThemes()
+
+    FileView {
+        path: Quickshell.env("HOME") + "/.cache/current_theme"
+        blockLoading: true
+        watchChanges: true
+        onFileChanged: reload()
+        onLoaded: root.currentTheme = text().trim() || "matugen"
+    }
+
+    FileView {
+        path: Quickshell.env("HOME") + "/.cache/current_mode"
+        blockLoading: true
+        watchChanges: true
+        onFileChanged: reload()
+        onLoaded: {
+            var mode = text().trim() === "light" ? "light" : "dark";
+            // a mode the wallpaper chose: applications follow, as they do when it is
+            // picked by hand. once browsing has settled, not on every picture passed
+            if (root.autoColorMode && root.modeLoaded && mode !== root.colorMode)
+                envModeFollow.restart();
+            root.colorMode = mode;
+            root.modeLoaded = true;
+        }
+    }
+
+    property bool modeLoaded: false
+
+    Timer {
+        id: envModeFollow
+
+        interval: 3000
+        onTriggered: root.envColorScheme = root.colorMode
+    }
+
+    Timer {
+        id: writeDebounce
+
+        interval: 120
+        repeat: false
+        onTriggered: prefsFile.writeAdapter()
+    }
+
+    FileView {
+        id: prefsFile
+
+        path: Quickshell.env("HOME") + "/.config/quickshell/lucidprefs/prefs.json"
+        blockLoading: true
+        watchChanges: true
+        onFileChanged: reload()
+        onAdapterUpdated: writeDebounce.restart()
+        onLoaded: {
+            // only the first load: a reload after a write must not skip the slide
+            if (root.barShownPosition === "")
+                root.barShownPosition = root.barPosition;
+
+            root.loaded = true;
+        }
+        onLoadFailed: root.loaded = true
+
+        adapter: JsonAdapter {
+            id: s
+
+            property string barStyle: "island"
+            property string barPosition: "top"
+            property string dockStyle: "island"
+            property real accentPunch: 1
+            property real surfaceDarkness: -1
+            property real surfaceTint: -1
+            property real motionScale: 1
+            property bool jellyMotion: true
+            property real jellyAmount: 1
+            property string fontFamily: "Google Sans"
+            property real fontScale: 1
+            property real uiScale: 1
+            property string language: "auto"
+            property real cornerScale: 1
+            property int shellGap: 0
+            property string wallpaperFolder: ""
+            property string wallpaperPickerStyle: "strip"
+            // "sides": left and right change the wallpaper; "updown": up and down do,
+            // and left and right stay with the search field. Tiles takes all four.
+            property string wallpaperPickerKeys: "sides"
+            // videos in the wallpaper folder, played behind the desktop (LiveWall.qml).
+            // decoder: auto | vaapi | cuda | cpu; pause under: never | fullscreen | any;
+            // in game mode: play | pause | still (the first frame, player stopped)
+            property bool liveWallpapers: true
+            property string liveDecoder: "auto"
+            property string livePauseUnder: "fullscreen"
+            property string liveGameMode: "pause"
+            property string wallpaperPillsShape: "uniform"
+            property string wallpaperStripSteps: "normal"
+            property int wallpaperStripSides: 2
+            property int wallpaperTilesRows: 2
+            property string wallpaperTilesAspect: "square"
+            property string wallpaperBentoHero: "medium"
+            property bool wallpaperBentoPrev: true
+            property string wallTransType: "fade"
+            property real wallTransDuration: 1
+            property int wallTransAngle: 45
+            property string wallTransOrigin: "center"
+            property string wallTransBezier: ".54,0,.34,.99"
+            property string wallTransWave: "20,20"
+            property string wallTransPreset: "soft"
+            property string wallTransCustomPresets: ""
+            property string themeOrder: ""
+            property string hiddenThemes: ""
+            property string matugenScheme: "scheme-tonal-spot"
+            property real matugenContrast: 0
+            property string matugenSourceImage: ""
+            property int matugenSourceIndex: 0
+            property string themeColour: "#6750a4"
+            property bool barEnabled: true
+            property bool barPopupMode: false
+            property int barPopupGap: 10
+            property bool barPopupNotched: false
+            property int barHeight: 35
+            property real barContentScale: 1
+            property int barTopMargin: 22
+            property int barSideMargin: 17
+            property int barSpacing: 8
+            property int barHoverGrow: 3
+            property bool autoColorMode: false
+            property int barZoneGap: 26
+            property string systemTiles: "dnd,awake,dark,airplane,location,mic,capture,record,picker,keyboard,timer,session"
+            // the control centre: its blocks, and what each holds, in order
+            property bool systemTilesRadios: false
+            property string systemBigTiles: "wifi,bluetooth"
+            property string systemBlocks: "sliders,bigtiles,tiles,media,gauges"
+            property string systemSliders: "brightness,volume"
+            property string systemInfo: "cpu,ram,disk,battery"
+            // where each block sits on the panel's grid, as JSON; empty lays
+            // them one under another in the order above
+            property string systemGrid: ""
+            // a card behind the tiles and the sliders too, as media and the gauges have
+            property bool systemBlockCards: false
+            // tiles that run the user's commands, as a JSON list of
+            // { id, name, icon, on, off, status }
+            property string systemOwnTiles: ""
+            // the look each block takes, as JSON { block: look }; one not
+            // named keeps the look it always had
+            property string systemBlockStyles: ""
+            // control centre layouts the user saved, as JSON; kept out of
+            // the defaults, so no reset throws them away
+            property string systemLayouts: ""
+            property string systemHeaderButtons: "edit,settings,lock,power"
+            property string barLayout: "{\"left\":[\"workspaces\",\"media\",\"tray\"],\"center\":[\"clock\"],\"right\":[\"notifications\",\"system\"]}"
+            property string barJoins: "[]"
+            property bool barJoinDividers: true
+            property bool showWorkspaces: true
+            property bool showMedia: true
+            property bool showTray: true
+            property bool showKbLayout: true
+            property string systemBarItems: "wifi,bluetooth,volume,level,mic,battery"
+            property string gameModeOnCmd: ""
+            property string gameModeOffCmd: ""
+            property string gameModeStatusCmd: ""
+            property bool showClock: true
+            property bool showNotifications: true
+            property bool showSystem: true
+            property bool showPrivacy: false
+            property string privacyWatch: "mic,camera,screen"
+            property bool privacyToast: true
+            property bool privacyAlwaysShown: false
+            property string privacyStyle: "marks"
+            property bool showPower: false
+            property string powerModuleActions: "lock,suspend,hibernate,logout,reboot,shutdown"
+            property bool powerModuleConfirm: true
+            property bool powerModuleUptime: true
+            property string powerModuleStyle: "icon"
+            property string powerModulePanelStyle: "list"
+            property bool showWindow: false
+            property string windowModuleText: "title"
+            property int windowModuleWidth: 260
+            property bool windowModuleScroll: true
+            property bool windowModuleMiddleClose: false
+            property bool showStart: false
+            property string startModuleStyle: "grid"
+            property bool showApps: false
+            property bool workspacesByDisplay: true
+            property bool audioMeters: true
+            property string clockStyle: "accent"
+            property string clockDateFormat: "dayMonth"
+            property string mediaStyle: "disc"
+            property string mediaPanelStyle: "side"
+            property bool mediaHideIdle: false
+            property bool mediaArtist: true
+            property int mediaTitleWidth: 170
+            property bool mediaPlayButton: true
+            property bool mediaWheelVolume: true
+            property bool mediaLyrics: true
+            property string workspacesStyle: "dots"
+            property int workspacesShown: 6
+            property bool workspacesWheel: true
+            // the overview grows out of the module, as it did before it slid down from the top
+            property bool workspacesLegacy: false
+            property string notificationsStyle: "badge"
+            property string trayStyle: "collapsed"
+            property string trayIconColor: "original"
+            property string trayHidden: ""
+            property bool clock24h: false
+            property string lockPreset: "centre"
+            property string lockSlots: ""
+            property string lockWidgetOpts: ""
+            property int lockBlur: 50
+            property int lockDim: 40
+            property bool lockTint: true
+            property bool lockDive: true
+            property int lockIdleBack: 25
+            property string lockOtherScreens: "clock"
+            property bool lockLoginWeather: true
+            property bool lockLoginSync: false
+            property bool clockShowDate: true
+            property bool gpsEnabled: false
+            property string locationName: ""
+            property string locationLabel: ""
+            property real locationLat: 52.4083
+            property real locationLon: 16.9336
+            property bool nightLight: false
+            property int nightLightTemp: 4000
+            property string nightLightSchedule: "off"
+            property int nightLightFrom: 1260
+            property int nightLightTo: 420
+            property string locationTz: ""
+            property bool timeZoneAuto: true
+            property bool doNotDisturb: false
+            property string osdStyle: "island"
+            property bool osdDockMorph: true
+            property string osdToggles: "osd"
+            property int toastTimeout: 5
+            property bool toastOnLayout: true
+            property bool toastOnGameMode: true
+            property bool toastOnBattery: true
+            property bool toastOnBluetooth: true
+            property bool toastOnWifi: true
+            property bool toastOnAudio: true
+            property bool toastOnDisplays: true
+            property bool toastOnPower: true
+            property bool toastOnUsb: true
+            property bool toastOnCamera: true
+            property bool toastEnabled: true
+            property bool toastUseAppTimeout: true
+            property bool toastCriticalSticky: true
+            property bool toastShowBody: true
+            property bool toastShowActions: true
+            property int toastBodyLines: 4
+            property bool notifShowIcons: true
+            property int notifMaxHistory: 50
+            property bool dndAllowCritical: true
+            property bool dndFullscreen: false
+            property bool quietHours: false
+            property int quietFrom: 1320
+            property int quietTo: 420
+            property bool notifSound: false
+            property string notifSoundName: "glint"
+            property real notifSoundVolume: 0.6
+            property bool notifSoundUrgentOnly: false
+            property bool sysSounds: true
+            property real sysSoundVolume: 0.6
+            property bool soundOnUsb: true
+            property bool soundOnBluetooth: true
+            property bool soundOnCharger: true
+            property bool soundOnBattery: true
+            property bool soundOnCapture: true
+            property bool soundOnCamera: true
+            property bool soundOnVolume: true
+            property bool soundOnBrightness: true
+            property bool soundOnCaps: true
+            property bool soundOnMic: true
+            property string notifMutedApps: ""
+            property string notifSeenApps: ""
+            property bool notifGrouping: true
+            property bool notifTimestamps: true
+            property bool notifProgress: true
+            property bool notifInlineReply: true
+            property int toastMaxVisible: 3
+            property bool dockEnabled: true
+            // switched off by the bar taking the bottom edge, not by hand
+            property bool dockAsideForBar: false
+            property int dockIconSize: 41
+            property int dockSpacing: 12
+            property int dockRadius: 40
+            property int dockIconPadding: 0
+            property int dockBottomMargin: 13
+            property bool dockMagnify: true
+            property real dockHoverEffect: 1
+            property real barMotionScale: 1.35
+            property int barNotchFlare: 14
+            property int barFullCorner: 18
+            property bool barNotchEdge: false
+            property bool barHoverOpen: false
+            property bool barAutoHide: false
+            property int dockNotchFlare: 14
+            property int dockSplitGap: 8
+            property bool dockAutoHide: false
+            property bool dockDynamicHide: false
+            property bool dockShowIndicators: true
+            property bool dockShowTooltips: true
+            property bool dockShowRunning: true
+            property bool dockIconTiles: false
+            property bool clipboardEnabled: true
+            property bool widgetsEnabled: true
+            property bool widgetSnap: true
+            property bool widgetLockAll: false
+            property bool widgetHideFullscreen: false
+            property bool widgetOnTop: false
+            property bool btScanOnOpen: true
+            property bool btShowUnnamed: false
+            property bool btReceive: true
+            property bool btAgent: true
+            property string btReceiveFolder: ""
+            property bool btReceiveAutoPaired: false
+            property bool audioMoveStreams: true
+            property string audioCombine: ""
+            property bool kdeConnectEnabled: true
+            property bool updateCheck: true
+            property bool updateBeta: false
+            property bool storageLowWarn: true
+            property int storageLowPercent: 10
+            property int storageTrashDays: 0
+            property bool idleEnabled: false
+            property bool idleAutostart: true
+            property bool idleKeepAwake: false
+            property bool idleAdopted: false
+            property bool idleDim: true
+            property int idleDimAfter: 120
+            property int idleDimLevel: 10
+            property bool idleDimKeyboard: true
+            property bool idleLock: true
+            property int idleLockAfter: 600
+            property bool idleScreenOff: true
+            property int idleScreenOffAfter: 900
+            property bool idleSuspend: false
+            property int idleSuspendAfter: 1800
+            property bool idleSuspendOnAc: false
+            property bool idleLockBeforeSleep: true
+            property bool idleWakeAfterSleep: true
+            property bool idleRespectInhibitors: true
+            property bool idleWhileMedia: true
+            property bool desktopSelection: true
+            property bool desktopMenu: true
+            property bool desktopIcons: false
+            property string desktopIconSize: "medium"
+            property string desktopIconsCorner: "left"
+            property string desktopIconsSort: "name"
+            property string desktopIconsOpen: "double"
+            property bool desktopIconsThumbs: true
+            property bool desktopIconsHidden: false
+            property bool desktopIconsHideExt: false
+            property bool desktopIconsHome: false
+            property bool desktopIconsTrash: true
+            property bool desktopIconsDrives: true
+            property bool desktopIconsShown: true
+            property bool desktopIconsAutoArrange: false
+            property bool desktopIconsSortDesc: false
+            property bool desktopIconsSpring: true
+            property string desktopKeys: "{}"
+            property string desktopIconSpacing: "normal"
+            property string shotPreview: "preview"
+            property int shotPreviewSeconds: 6
+            // lucidshot: where captures go (empty is ~/Pictures/screenshots), whether
+            // a file is kept at all, window corners, the magnifier, the ocr language
+            property string shotFolder: ""
+            property bool shotSaveFile: true
+            property bool shotRoundWindows: true
+            property bool shotLoupe: true
+            property string shotOcrLang: "eng"
+            // and its recorder: the folder (empty is ~/Videos), the count before it
+            // starts, a fixed frame rate (0 follows the screen) and the encoder
+            property string recordFolder: ""
+            property int recordCountdown: 3
+            property int recordFps: 0
+            property string recordEncoder: "auto"
+            // the osd's card as caps lock or num lock goes on or off
+            property bool osdCapsLock: true
+            property bool osdNumLock: true
+            property bool envAdopted: false
+            property string envCursorTheme: ""
+            property int envCursorSize: 24
+            property bool envCursorShadow: true
+            property bool envLegacyCursor: false
+            property string envCursorStyle: "dark"
+            property string envCursorSet: "nimbus"
+            property string envIconTheme: ""
+            property bool envLegacyIcons: false
+            property string envIconSet: "gravity"
+            property string envGtkTheme: ""
+            property string envQtStyle: "Fusion" // i18n-skip: qt reads it back; a binding would also reset it on a language change
+            property string envQtPlatformTheme: ""
+            property string envColorScheme: "auto"
+            property bool envFontSync: false
+            property string envAppFont: ""
+            property int envAppFontSize: 11
+            property string envDocumentFont: ""
+            property int envDocumentFontSize: 11
+            property string envMonoFont: ""
+            property int envMonoFontSize: 10
+            property bool envApplyGtk: true
+            property bool envApplyQt: true
+            property bool envApplyHypr: true
+            property bool specialScratchpad: true
+            property bool specialMusic: true
+            property bool specialComms: true
+            property bool specialTodo: true
+            property bool specialSysmon: true
+            property string specialMusicApps: "auto"
+            property string specialCommsApps: "auto"
+            property string specialTodoApps: "auto"
+            property string specialSysmonApps: "auto"
+            property bool specialKeepApps: true
+            property bool specialHideOnSwitch: false
+            property real specialDim: 0.2
+            property bool specialBlur: false
+            property int specialGaps: 0
+            property string specialCustom: "[]"
+            property string hyprOptions: "{}"
+            property string pinBorder: "tertiary"
+            property string pinBadge: "top-right"
+            property bool pinPulse: true
+            property string urgentBadge: "top-left"
+            property bool urgentPulse: true
+            property string startupApps: "[]"
+            property string startupEnv: "[]"
+            property bool startupXdg: false
+            // the apps on the Glass page, and the ones given their own value
+            property string glassApps: "vscodium"
+            property string glassValues: "vscodium=0.9"
+            // what Settings > Displays gave each output, and which one the shell sits on
+            property string monitorSetups: "{}"
+            property string monitorShellScreen: ""
+            property string monitorBarScreen: ""
+            property string monitorDockScreen: ""
+            property bool clockShowSeconds: false
+            property bool clockShowWeather: true
+            property bool clockShowTimer: true
+            property string clockWorldZones: "Europe/London,America/New_York,Asia/Tokyo"
+            property int pomodoroFocus: 25
+            property int pomodoroShort: 5
+            property int pomodoroLong: 15
+            property int pomodoroRounds: 4
+            property bool pomodoroAutoStart: true
+            property bool pomodoroAutoFocus: true
+            property bool pomodoroRepeat: true
+            property bool pomodoroSilence: false
+            property int pomodoroGoal: 0
+            property bool timerSound: true
+            property bool reminderSound: true
+            property bool weekStartMonday: true
+            property string units: "metric"
+            property string launcherSearchEngine: "duckduckgo"
+            property bool launcherWebRow: true
+            property bool launcherWindows: true
+            property bool launcherAppActions: true
+            property bool launcherAppDescriptions: false
+            property bool launcherPowerSearch: true
+            property bool launcherAddressFirst: true
+            property bool launcherPowerChips: false
+            property string launcherPowerButtons: "lock,suspend,reboot,shutdown"
+            property string launcherWidth: "standard"
+            property string launcherSearchPosition: "bottom"
+            property string launcherDensity: "compact"
+            property bool launcherModeBar: true
+            property bool launcherActionHints: true
+            property bool launcherFrequentFirst: true
+            property bool launcherCalculator: true
+            property bool launcherSettingsResults: true
+            property real launcherContentScale: 0.8
+            property string launcherHiddenApps: ""
+            property string monitorWorkspaces: "{}"
+        }
+
+    }
+
+}

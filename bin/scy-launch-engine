@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Scy-Shell v2.0 — Single-Instance Engine Launcher (flock inherited across execvp).
+
+Prevents competing startups (e.g., systemd user unit + Hyprland exec-once) from ever
+spawning duplicate Quickshell or Mandara runtime instances, without using killall/pkill.
+"""
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import shutil
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+for cand in [HERE.parent / "src", Path("/usr/share/scy-shell/src")]:
+    if cand.exists():
+        sys.path.insert(0, str(cand))
+        break
+
+from scy_core.config_store import ScyConfigStore  # noqa: E402
+from scy_core.process_guard import runtime_lock_dir  # noqa: E402
+
+
+def main() -> int:
+    if len(sys.argv) < 2 or sys.argv[1] not in ("lucid", "mandara"):
+        print("Usage: scy-launch-engine <lucid|mandara> [extra-args...]", file=sys.stderr)
+        return 2
+
+    engine = sys.argv[1]
+    extra = sys.argv[2:]
+    home = Path(os.environ.get("SCY_HOME", str(Path.home())))
+
+    # 1. Acquire non-blocking kernel flock on engine-<name>.lock.
+    #    Keep FD open (close_fds=False / set_inheritable=True) across os.execvp so the
+    #    kernel holds the lock for the exact lifetime of the engine process!
+    lock_dir = runtime_lock_dir(home)
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / f"engine-{engine}.lock"
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        try:
+            existing = lock_path.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            existing = "{}"
+        print(
+            f"[scy-launch-engine] Single-instance guard: '{engine}' is already active ({existing}); exiting cleanly.",
+            file=sys.stderr,
+        )
+        os.close(fd)
+        return 0
+
+    os.set_inheritable(fd, True)
+    os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
+    meta = json.dumps({"engine": engine, "pid": os.getpid(), "started_at": time.time()}) + "\n"
+    os.write(fd, meta.encode("utf-8"))
+
+    # 2. Ensure reconciled config & single-owner scy_gates exist on disk BEFORE frame 0!
+    try:
+        store = ScyConfigStore(home_dir=home)
+        store.reconcile_startup_state()
+    except Exception as exc:
+        print(f"[scy-launch-engine] Warning: startup state reconcile reported: {exc}", file=sys.stderr)
+
+    # 3. Resolve target command and replace process image via execvp (preserving flock FD).
+    if engine == "lucid":
+        qs_bin = shutil.which("quickshell") or "/usr/bin/quickshell"
+        qs_dir = home / ".config" / "quickshell" / "lucid"
+        cmd = [qs_bin, "-p", str(qs_dir), *extra]
+    else:
+        local_mandara = home / ".local" / "bin" / "mandara"
+        m_bin = str(local_mandara) if local_mandara.is_file() and os.access(local_mandara, os.X_OK) else (shutil.which("mandara") or "mandara")
+        cmd = [m_bin, *extra]
+
+    if os.environ.get("SCY_LAUNCH_DRY_RUN") == "1":
+        print(json.dumps({"ok": True, "engine": engine, "lock_path": str(lock_path), "cmd": cmd}))
+        return 0
+
+    os.execvp(cmd[0], cmd)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Scy-Shell v2.0 — Unified Single-Instance Background Coordinator & Persistence Daemon."""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import signal
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from scy_core.config_store import ScyConfigStore
+from scy_core.conflicts import ScyConflictScanner
+from scy_core.desktop_canvas import ScyDesktopCoordinator
+from scy_core.hypr_coordinator import ScyHyprCoordinator
+from scy_core.ipc_bus import ScyIpcServer
+from scy_core.process_guard import ProcessSupervisor, SingleInstanceLock
+from scy_core.security_preauth import ScyPreAuthCoordinator
+from scy_core.theme_engine import ScyThemeCoordinator
+
+
+async def _live_reconcile_loop(store: ScyConfigStore, stop_ev: asyncio.Event, interval_s: float = 2.0) -> None:
+    """Continuously reconciles direct native engine writes (QML Prefs.save(), Mandara TOML)
+    into ScyConfigStore so settings NEVER vanish across logout/login or power loss."""
+    while not stop_ev.is_set():
+        try:
+            await asyncio.wait_for(stop_ev.wait(), timeout=interval_s)
+            break
+        except asyncio.TimeoutError:
+            try:
+                rec = store.reconcile_live_engine_stores()
+                if rec.get("reconciled_files"):
+                    store.flush_all()
+            except Exception as exc:
+                store.log_persistence_error(f"live_reconcile_loop: {exc}")
+
+
+async def run_daemon(home: Path | None, socket_path: Path | None) -> int:
+    lock_dir = (home / ".local" / "state" / "scy-shell" / "locks") if home else None
+    guard = SingleInstanceLock("scy-daemon", lock_dir=lock_dir)
+    if not guard.acquire(blocking=False):
+        holder = guard.read_owner()
+        print(f"[scy-daemon] Single-instance lock already held ({holder}); exiting cleanly.", flush=True)
+        return 0
+
+    try:
+        ProcessSupervisor().enforce_single_shell_instances()
+        # ScyConfigStore.__init__ reconciles live engine stores BEFORE flushing!
+        store = ScyConfigStore(home_dir=home)
+        store.flush_all()
+        ScyConflictScanner(store).to_json_report()
+
+        thm = ScyThemeCoordinator(store)
+        thm.write_mandara_portable_m3_look()
+        seed = str(
+            store.doc["providers"]["lucid"]["prefs"].get("themeColour")
+            or store.doc["identity"].get("accent_seed", "#7aa2f7")
+        )
+        thm.apply_palette(seed_hex=seed, dark_mode=bool(store.doc["identity"].get("dark_mode", True)))
+
+        ScyDesktopCoordinator(store).write_portal_config()
+        ScyPreAuthCoordinator(store).stage_display_manager_configs()
+        ScyHyprCoordinator(store).emit_modular_configs()
+
+        server = ScyIpcServer(store, sock_path=socket_path)
+        await server.start()
+
+        stop_ev = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop_ev.set)
+
+        watcher_task = asyncio.create_task(_live_reconcile_loop(store, stop_ev))
+        print(
+            f"[scy-daemon] v2.0.0 ready on {server.sock_path} "
+            f"({store.schema.total_count} unified settings across 15 Studio sections)",
+            flush=True,
+        )
+        await stop_ev.wait()
+        watcher_task.cancel()
+        try:
+            await watcher_task
+        except asyncio.CancelledError:
+            pass
+        # Final clean reconciliation on shutdown
+        store.reconcile_live_engine_stores()
+        store.flush_all()
+        await server.stop()
+        return 0
+    finally:
+        guard.release()
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Scy-Shell v2.0 Unified Coordinator Daemon")
+    ap.add_argument("--home", type=Path, default=None, help="Override HOME directory")
+    ap.add_argument("--socket", type=Path, default=None, help="Override Unix socket path")
+    args = ap.parse_args()
+    raise SystemExit(asyncio.run(run_daemon(args.home, args.socket)))
+
+
+if __name__ == "__main__":
+    main()

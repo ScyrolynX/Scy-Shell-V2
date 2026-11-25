@@ -1,0 +1,2002 @@
+#!/usr/bin/env bash
+# Lucid installer — Arch Linux + Hyprland
+#
+# installs dependencies, places the shell at ~/.config/quickshell, and sets up
+# the full bundle: the Hyprland config (binds, window rules, blur, autostart),
+# the theming layer, the Lucid look, and the apps the dock ships pinned.
+# safe to re-run: existing config and personal state are backed up, never
+# overwritten in place.
+
+set -euo pipefail
+
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# the VERSION file ships inside the shell tree, so the installed copy can tell
+# the update check which version it is. bump it to cut a release
+VERSION="unknown"
+if [[ -f "$SRC/VERSION" ]]; then
+    VERSION="$(tr -d '[:space:]' < "$SRC/VERSION")"
+fi
+SHELL_DIR="$HOME/.config/quickshell"
+LUCID_DIR="$HOME/.config/lucid"
+MATUGEN_DIR="$HOME/.config/matugen"
+WALL_SCRIPT_DIR="$HOME/.config/hypr/scripts/wallpaper"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+BACKUP=""
+# how things stood before Lucid first changed them, for uninstall.sh to put
+# back. the first value of a key wins: a re-run would only record Lucid's own
+BEFORE="${XDG_STATE_HOME:-$HOME/.local/state}/lucid/before-install"
+
+WITH_THEMING=1
+WITH_LOOK=1
+WITH_HYPR=1
+WITH_APPS=1
+WITH_WALLPAPERS=1
+WITH_PLUGINS=1
+WITH_SDDM=1
+SDDM_CURRENT=0
+HYPR_FORCE=0
+HYPR_LUA_INSTALLED=0
+ASSUME_YES=0
+SKIP_DEPS=0
+# "" lets the checks below pick the window or the terminal
+WITH_GUI=""
+
+b=$'\e[1m'; dim=$'\e[2m'; red=$'\e[31m'; grn=$'\e[32m'; ylw=$'\e[33m'; r=$'\e[0m'
+say()  { printf '%s\n' "$*"; }
+step() { printf '\n%s==>%s %s%s\n' "$grn" "$r" "$b" "$*$r"; }
+warn() { printf '%s warning:%s %s\n' "$ylw" "$r" "$*" >&2; }
+die()  { printf '%s error:%s %s\n' "$red" "$r" "$*" >&2; exit 1; }
+
+usage() {
+    cat <<EOF
+${b}Lucid $VERSION installer${r}
+
+  ./install.sh [options]
+
+  --no-theming   skip the palette layer; leave ~/.config/lucid
+                 and ~/.config/matugen untouched
+  --no-look      don't touch kitty.conf, starship.toml, fastfetch or VSCode
+                 settings
+  --no-hypr      keep your Hyprland config; Lucid's binds, window
+                 rules and blur are not installed
+  --no-apps      don't install the apps pinned to the dock by
+                 default (Zen, VSCodium, Spotify, Steam, ...)
+  --no-wallpapers
+                 don't copy the bundled wallpapers to
+                 ~/Pictures/wallpapers
+  --with-hypr    reinstall Lucid's Hyprland config even when one
+                 is already in place
+  --no-plugins   don't build the tilting-cursor Hyprland plugin
+                 (hypr-dynamic-cursors)
+  --no-sddm      don't install the login screen theme
+  --login-screen make Lucid's theme the one the login screen shows
+                 (Current=lucid in /etc/sddm.conf, backed up first),
+                 and offer to make SDDM the login screen when it is not
+  --skip-deps    don't install packages, only check for them
+  -y, --yes      don't prompt, accept every default
+  --gui          do all of this from a window: pick what to install
+                 there, and answer its questions with buttons. the
+                 default when run with no options in a Wayland session;
+                 options given with it start switched that way
+  --terminal     stay in the terminal
+  -h, --help     this message
+EOF
+    exit 0
+}
+
+# the window gets the same options, minus its own, to start its switches from
+GUI_ARGS=()
+for a in "$@"; do
+    [[ $a == --gui || $a == --terminal ]] || GUI_ARGS+=("$a")
+done
+if [[ -z "$WITH_GUI" ]]; then
+    WITH_GUI=0
+    # any option means a script or a chosen terminal; the updater (LUCID_UPDATER) never asks
+    if [[ $# -eq 0 && -t 0 && -t 1 && -n "${WAYLAND_DISPLAY:-}" && -z "${LUCID_UPDATER:-}" ]]; then
+        WITH_GUI=1
+    fi
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-theming) WITH_THEMING=0 ;;
+        --no-look)    WITH_LOOK=0 ;;
+        --no-hypr)    WITH_HYPR=0 ;;
+        --no-apps)    WITH_APPS=0 ;;
+        --no-wallpapers) WITH_WALLPAPERS=0 ;;
+        --with-hypr)  WITH_HYPR=1; HYPR_FORCE=1 ;;
+        --no-plugins) WITH_PLUGINS=0 ;;
+        --skip-deps)  SKIP_DEPS=1 ;;
+        -y|--yes)     ASSUME_YES=1 ;;
+        --no-sddm)    WITH_SDDM=0 ;;
+        --login-screen) SDDM_CURRENT=1 ;;
+        --gui)        WITH_GUI=1 ;;
+        --terminal)   WITH_GUI=0 ;;
+        -h|--help)    usage ;;
+        *) die "unknown option: $1 (try --help)" ;;
+    esac
+    shift
+done
+
+ask() {
+    [[ $ASSUME_YES -eq 1 ]] && return 0
+    local reply
+    read -rp "$1 [Y/n] " reply
+    [[ -z "$reply" || "$reply" =~ ^[Yy] ]]
+}
+
+remember() {
+    mkdir -p "${BEFORE%/*}"
+    grep -qs "^$1=" "$BEFORE" || printf '%s=%s\n' "$1" "$2" >> "$BEFORE"
+}
+
+# ---------------------------------------------------------------------- gui
+
+# the window (installer.qml) runs this same script through lucidupdate/updater.py,
+# its switches as flags; only what the window itself needs is installed here
+if [[ $WITH_GUI -eq 1 ]]; then
+    if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+        warn "no Wayland session here, so the install carries on in the terminal"
+    else
+        [[ -f /etc/arch-release ]] || die "this installer is Arch-only. see the README for a manual install."
+        [[ $EUID -ne 0 ]] || die "don't run this as root — it installs into your home directory"
+        GUI_PKGS=(quickshell qt6-5compat qt6-declarative qt6-multimedia qt6-imageformats python)
+        missing=()
+        for p in "${GUI_PKGS[@]}"; do
+            pacman -Q "$p" &>/dev/null || missing+=("$p")
+        done
+        if [[ ${#missing[@]} -gt 0 ]]; then
+            step "Installing what the installer window needs"
+            say "  ${missing[*]}"
+            sudo pacman -S --needed "${missing[@]}" || die "could not install ${missing[*]}"
+        fi
+        say "  opening the installer window (./install.sh --terminal stays here)"
+        LUCID_INSTALL_ARGS="${GUI_ARGS[*]}" exec qs -p "$SRC/installer.qml"
+    fi
+fi
+
+# ---------------------------------------------------------------- preflight
+
+step "Checking the system"
+
+[[ -f /etc/arch-release ]] || die "this installer is Arch-only. see the README for a manual install."
+command -v pacman &>/dev/null || die "pacman not found"
+[[ $EUID -ne 0 ]] || die "don't run this as root — it installs into your home directory"
+[[ -f "$SRC/shell.qml" ]] || die "run this from inside the Lucid repo (no shell.qml next to install.sh)"
+
+AUR=""
+for helper in paru yay; do
+    command -v "$helper" &>/dev/null && { AUR="$helper"; break; }
+done
+
+say "  arch linux      ${grn}ok${r}"
+say "  aur helper      ${AUR:-${ylw}none${r}}"
+say "  install target  $SHELL_DIR"
+say "  theming layer   $([[ $WITH_THEMING -eq 1 ]] && echo yes || echo 'no (--no-theming)')"
+say "  hyprland config $([[ $WITH_HYPR   -eq 1 ]] && echo yes || echo 'no (--no-hypr)')"
+say "  dock apps       $([[ $WITH_APPS   -eq 1 ]] && echo yes || echo 'no (--no-apps)')"
+say "  wallpapers      $([[ $WITH_WALLPAPERS -eq 1 ]] && echo yes || echo 'no (--no-wallpapers)')"
+
+# ------------------------------------------------------------- dependencies
+
+# required — the shell will not start or will visibly break without these.
+# qt6-webengine is here for the qt pdf module it carries: lumen's preview pane
+# imports it, and a window with an import it can't resolve doesn't load at all,
+# which would take SUPER+E and every app's file dialog with it
+PKG_REQUIRED=(hyprland quickshell qt6-5compat qt6-declarative qt6-multimedia qt6-webengine)
+# each of these backs one feature; missing ones degrade that feature only
+PKG_FEATURES=(
+    matugen jq imagemagick
+    networkmanager qrencode bluez bluez-utils bluez-obex
+    kdeconnect sshfs python-gobject
+    libpulse wireplumber brightnessctl upower hypridle hyprsunset
+    grim wf-recorder ffmpeg wl-clipboard wtype cliphist
+    tesseract tesseract-data-eng hyprpicker
+    python-pillow python-numpy python-fonttools
+    cava songrec curl libnotify awww fastfetch
+    python-pywal noto-fonts-emoji
+    # the shell is the session's own polkit agent; polkitd and its setuid
+    # helper are the backend it drives
+    xdg-utils zenity polkit
+    # the accounts page reads and writes users through this, and asks the
+    # shell's polkit dialog whenever a change needs an administrator
+    accountsservice
+    # the environment page writes the desktop's appearance through these, and
+    # the file chooser kde connect sends files with comes from the gtk portal.
+    # librsvg renders a cursor theme again when its shadow is turned off, and
+    # draws lucid's own pointer (bibata modern in the palette) through python-cairo
+    gsettings-desktop-schemas qt6ct xdg-desktop-portal-gtk librsvg python-cairo
+    # sharing the screen (browsers, Discord, OBS) goes through Hyprland's own portal
+    xdg-desktop-portal-hyprland
+    # the launcher's $ mode runs a command in the user's terminal through this
+    xdg-terminal-exec
+    # the camera on/off toast hears /dev/video* opened and closed through this
+    inotify-tools
+    # the Sound page's Left/Right test: pw-play, and the voice that names each side
+    pipewire-audio sound-theme-freedesktop
+    # the Storage page: a drive's health, and mounting or ejecting one
+    smartmontools udisks2
+    # the desktop icons: video and music thumbnails, and the drives and trash they show
+    ffmpegthumbnailer gvfs
+    # lumen's network drives past sftp and ftp, which gvfs reaches alone: windows
+    # shares and most nas drives, nfs, webdav and the computers nearby (through
+    # avahi), and windows computers nearby
+    gvfs-smb gvfs-nfs gvfs-dnssd gvfs-wsdd
+    # pictures: qt draws webp, tiff, tga and icns through its image plugins and
+    # avif through kde's, in lens, the photo widget and the what's new sheet.
+    # jpegtran and exiv2 let lens turn a jpeg without encoding it again
+    qt6-imageformats kimageformats libjpeg-turbo exiv2
+)
+# invoked by the shipped Hyprland binds and the Lucid look. without these the
+# config installs fine but its keys do nothing and the prompt renders as boxes.
+# the file manager is not among them: SUPER+E opens lumen, which is part of the
+# shell (lucidlumen/), and lumen is every app's file dialog too
+PKG_HYPR=(
+    kitty playerctl gnome-calculator
+    starship fish ttf-jetbrains-mono-nerd adw-gtk-theme papirus-icon-theme
+)
+# the dock's default pins. these are the apps Lucid ships pinned, so the dock
+# is not a row of blank letter tiles on a fresh install. --no-apps skips them.
+# order matches the dock; steam is filtered out below unless multilib is on
+PKG_DOCK=(
+    zen-browser-bin vscodium-bin vesktop
+    spotify proton-vpn-gtk-app steam
+)
+# a package already covered by an equivalent one the user chose themselves.
+# without this a re-run keeps trying to install vscodium-bin over vscodium
+declare -A PKG_ALTS=(
+    [vscodium-bin]="vscodium vscodium-git visual-studio-code-bin code"
+    [zen-browser-bin]="zen-browser zen-browser-avx2-bin"
+    [vesktop]="vesktop-bin discord"
+    [spotify]="spotify-launcher"
+    [ttf-jetbrains-mono-nerd]="nerd-fonts ttf-jetbrains-mono"
+    [adw-gtk-theme]="adw-gtk3 adw-gtk3-git"
+    [qt6ct]="qt6ct-kde"
+    [xdg-desktop-portal-gtk]="xdg-desktop-portal-gnome xdg-desktop-portal-kde"
+    [kimageformats]="qt6-avif-image-plugin"
+)
+
+# a couple of the dock's AUR packages need something in place before the build
+# will even start. without this the package silently drops out of the install
+# with a warning, and the dock is left drawing a blank letter tile for it.
+SPOTIFY_KEY=E1096BCBFF6D418796DE78515384CE82BA52C83A
+aur_prepare() {
+    # the spotify PKGBUILD verifies its .deb against Spotify's own signing
+    # key. that key ships in nobody's keyring, so a fresh machine fails with
+    # "unknown public key" every time. import it first; the download server is
+    # the PKGBUILD's own, with a keyserver as the fallback
+    [[ "$1" == spotify ]] || return 0
+    gpg --list-keys "$SPOTIFY_KEY" &>/dev/null && return 0
+    say "  importing Spotify's package signing key"
+    if curl -sS https://download.spotify.com/debian/pubkey_5384CE82BA52C83A.gpg 2>/dev/null \
+         | gpg --import - &>/dev/null; then
+        return 0
+    fi
+    gpg --keyserver keyserver.ubuntu.com --recv-keys "$SPOTIFY_KEY" &>/dev/null \
+        || warn "  could not import Spotify's signing key — the build may fail"
+}
+
+# true when the package, or anything standing in for it, is installed
+have_pkg() {
+    pacman -Qq "$1" &>/dev/null && return 0
+    local alt
+    for alt in ${PKG_ALTS[$1]:-}; do
+        pacman -Qq "$alt" &>/dev/null && return 0
+    done
+    return 1
+}
+
+# the vulkan drivers, 64 and 32-bit, for the gpus this machine actually has.
+# steam's are virtual dependencies, and --noconfirm settles each one with its
+# first provider: nvidia-utils and lib32-nvidia-utils. on an intel or amd box
+# with no 32-bit driver yet, that leaves the client and every 32-bit game
+# without vulkan, and nvidia's userspace on a machine with no nvidia card
+steam_drivers() {
+    local card vendor out="" seen=" " known=0
+    for card in /sys/class/drm/card*; do
+        [[ ${card##*/} =~ ^card[0-9]+$ && -r $card/device/vendor ]] || continue
+        vendor=$(< "$card/device/vendor")
+        [[ $seen == *" $vendor "* ]] && continue
+        seen+="$vendor "
+        case $vendor in
+            0x1002) out+=" vulkan-radeon lib32-vulkan-radeon" ;;
+            0x8086) out+=" vulkan-intel lib32-vulkan-intel" ;;
+            0x1af4) out+=" vulkan-virtio lib32-vulkan-virtio" ;;
+            # the 32-bit half has to match nvidia-utils, so it is named only
+            # beside that exact package; a legacy branch keeps its own, and
+            # with no proprietary driver at all the card runs nouveau
+            0x10de)
+                known=1
+                if pacman -Qq nvidia-utils &>/dev/null; then
+                    out+=" lib32-nvidia-utils"
+                elif [[ ! -r /proc/driver/nvidia/version ]]; then
+                    out+=" vulkan-nouveau lib32-vulkan-nouveau"
+                fi ;;
+        esac
+    done
+    # a vm or anything unrecognised gets the software driver, never nvidia's
+    [[ -n $out || $known -eq 1 ]] || out=" vulkan-swrast lib32-vulkan-swrast"
+    printf '%s\n' "${out# }"
+}
+
+missing=()
+DEPS_OK=1
+
+step "Resolving dependencies"
+
+# a never-synced pacman database makes every -Si lookup fail, so real repo
+# packages get misread as AUR and nothing installs. check against a package
+# that is guaranteed present rather than trusting the db exists.
+if ! pacman -Si bash &>/dev/null; then
+    warn "your pacman database is empty or stale — package lookups will fail."
+    warn "run this first, then re-run the installer:"
+    warn "    sudo pacman -Syu"
+    if ! ask "  Continue anyway (dependencies will likely be skipped)?"; then
+        die "stopped. run 'sudo pacman -Syu' and try again."
+    fi
+fi
+
+WANTED=("${PKG_REQUIRED[@]}" "${PKG_FEATURES[@]}")
+[[ $WITH_HYPR -eq 1 || $WITH_LOOK -eq 1 ]] && WANTED+=("${PKG_HYPR[@]}")
+
+if [[ $WITH_APPS -eq 1 ]]; then
+    for p in "${PKG_DOCK[@]}"; do
+        # steam lives in multilib. with that repo off the lookup fails, the
+        # name gets misread as an AUR package and the build fails much later
+        if [[ "$p" == steam ]] && ! grep -q '^\[multilib\]' /etc/pacman.conf 2>/dev/null; then
+            say "  ${dim}skipping steam — the multilib repo is not enabled${r}"
+            continue
+        fi
+        WANTED+=("$p")
+    done
+fi
+
+# named in the same transaction as steam, so pacman never has to pick. a re-run
+# adds what an earlier install left out (its only 32-bit driver nvidia's)
+if [[ " ${WANTED[*]} " == *" steam "* ]]; then
+    read -ra STEAM_DRIVERS <<< "$(steam_drivers)"
+    WANTED+=("${STEAM_DRIVERS[@]}")
+fi
+
+for p in "${WANTED[@]}"; do
+    have_pkg "$p" || missing+=("$p")
+done
+
+if [[ ${#missing[@]} -eq 0 ]]; then
+    say "  everything is already installed"
+elif [[ $SKIP_DEPS -eq 1 ]]; then
+    DEPS_OK=0
+    say "  ${ylw}missing (--skip-deps, not installing):${r}"
+    printf '    %s\n' "${missing[@]}"
+else
+    # split by what the configured repos actually carry, so one unresolvable
+    # name can never take the whole batch down with it
+    from_repo=(); from_aur=()
+    for p in "${missing[@]}"; do
+        if pacman -Si "$p" &>/dev/null; then from_repo+=("$p"); else from_aur+=("$p"); fi
+    done
+
+    [[ ${#from_repo[@]} -gt 0 ]] && say "  from the repos: ${from_repo[*]}"
+    [[ ${#from_aur[@]}  -gt 0 ]] && say "  not in your repos, will try the aur: ${from_aur[*]}"
+
+    # the dock apps are the bulk of the download and the part people are most
+    # likely to want out of, so name them rather than burying them in the list
+    dock_missing=()
+    for p in "${PKG_DOCK[@]}"; do
+        for m in "${missing[@]}"; do [[ "$m" == "$p" ]] && dock_missing+=("$p") && break; done
+    done
+    if (( ${#dock_missing[@]} )); then
+        say "  ${dim}of those, the dock's default apps: ${dock_missing[*]}${r}"
+        say "  ${dim}(several GB, mostly from the aur — pass --no-apps to skip them)${r}"
+    fi
+
+    if ask "  install these now?"; then
+        if [[ ${#from_repo[@]} -gt 0 ]]; then
+            if sudo pacman -S --needed --noconfirm "${from_repo[@]}"; then
+                say "  repo packages installed"
+            else
+                DEPS_OK=0
+                warn "some repo packages failed to install — continuing anyway"
+            fi
+        fi
+        if [[ ${#from_aur[@]} -gt 0 ]]; then
+            if [[ -n "$AUR" ]]; then
+                # one at a time: a single bad name shouldn't block the rest
+                for p in "${from_aur[@]}"; do
+                    aur_prepare "$p"
+                    "$AUR" -S --needed --noconfirm "$p" || {
+                        DEPS_OK=0; warn "could not install $p"
+                    }
+                done
+            else
+                DEPS_OK=0
+                warn "no AUR helper (paru/yay) — install manually: ${from_aur[*]}"
+            fi
+        fi
+    else
+        DEPS_OK=0
+        warn "skipping. features backed by the missing packages will not work."
+    fi
+fi
+
+# --------------------------------------------------------------- the shell
+
+step "Installing the shell"
+
+# the desktop to send you back to. under Hyprland it says Hyprland was all
+[[ -z "${XDG_CURRENT_DESKTOP:-}" ]] || remember desktop "${XDG_CURRENT_DESKTOP##*:}"
+
+if [[ "$SRC" == "$SHELL_DIR" ]]; then
+    say "  already at $SHELL_DIR, installing in place"
+else
+    if [[ -e "$SHELL_DIR" ]]; then
+        BACKUP="$SHELL_DIR.backup-$STAMP"
+        say "  existing config found, moving it to ${dim}$BACKUP${r}"
+        mv "$SHELL_DIR" "$BACKUP"
+    fi
+    mkdir -p "$SHELL_DIR"
+    # everything but the repo's own scaffolding. runtime state is excluded
+    # too, so the copy can never carry another machine's settings, pins or
+    # api keys — those come from defaults/ in the seed step below
+    tar -C "$SRC" -cf - \
+        --exclude='.git' --exclude='.github' --exclude='.claude' \
+        --exclude='support' --exclude='defaults' --exclude='__pycache__' \
+        --exclude='wallpapers' --exclude='*.orig' --exclude='*.rej' \
+        --exclude='install.sh' --exclude='uninstall.sh' --exclude='installer.qml' \
+        --exclude='README.md' --exclude='LICENSE' --exclude='.gitignore' \
+        --exclude='./lucidprefs/prefs.json' \
+        --exclude='./lucidbar/blur.json' \
+        --exclude='./lucidbar/chrono.json' \
+        --exclude='./lucidbar/clock_reminders.json' \
+        --exclude='./lucidbar/mpris_shazam.json' \
+        --exclude='./luciddocks/pinned.json' \
+        --exclude='./luciddocks/usage.json' \
+        --exclude='./luciddocks/wallpaper.json' \
+        --exclude='./lucidmoji/config.json' \
+        --exclude='./lucidmoji/state.json' \
+        --exclude='./lucidkeys/state.json' \
+        --exclude='./lucidwidgets/widgets.json' \
+        --exclude='./luciddesktop/icons.json' \
+        . | tar -C "$SHELL_DIR" -xf -
+    say "  shell files -> $SHELL_DIR"
+fi
+
+# a git checkout knows its commit, so the in-shell updater can tell whether a
+# beta build is newer than this one. the updater records its own installs
+if [[ -z "${LUCID_UPDATER:-}" ]] && SHA="$(git -C "$SRC" rev-parse HEAD 2>/dev/null)"; then
+    mkdir -p "$HOME/.cache/quickshell/lucid-update"
+    printf '{"channel": "git", "ref": "%s", "sha": "%s", "version": "%s", "at": %s000}\n' \
+        "$SHA" "$SHA" "$VERSION" "$(date +%s)" > "$HOME/.cache/quickshell/lucid-update/installed.json"
+fi
+
+# lumen, lucid's file manager, runs as a quickshell of its own. its desktop
+# entry puts it in the app launcher and gives the dock its icon; it opens
+# folders, and every app's open and save dialog comes to it through the
+# portal. one still running holds the old files, so it goes first, unless it
+# is in the middle of a copy: the portal restart starts the new one, and an old
+# one still answering would leave the portal with no file dialogs at all
+if [[ -x "$SHELL_DIR/lucidlumen/lumen" ]]; then
+    "$SHELL_DIR/lucidlumen/lumen" --quit-if-idle || true
+    "$SHELL_DIR/lucidlumen/lumen" --default && say "  lumen -> app launcher, opens folders"
+    "$SHELL_DIR/lucidlumen/lumen" --portal && say "  lumen -> every app's file dialog"
+fi
+
+# lens, lucid's picture viewer, is a quickshell of its own as well. its desktop
+# entry puts it in the app launcher and makes it what opens pictures. one left
+# running with no window holds the old files, so it goes first
+if [[ -x "$SHELL_DIR/lucidlens/lens" ]]; then
+    "$SHELL_DIR/lucidlens/lens" --quit-if-idle || true
+    "$SHELL_DIR/lucidlens/lens" --default && say "  lens -> app launcher, opens pictures"
+fi
+
+# clock, lucid's clock app, is a quickshell of its own too. alarms, timers and
+# reminders ring from the shell, so it can stay closed; its desktop entry puts it
+# in the app launcher with its pages as actions. one left running with no window
+# holds the old files, so it goes first
+if [[ -x "$SHELL_DIR/lucidclock/clock" ]]; then
+    "$SHELL_DIR/lucidclock/clock" --quit-if-idle || true
+    "$SHELL_DIR/lucidclock/clock" --install && say "  clock -> app launcher"
+fi
+
+# the settings window is part of the shell's own process, so it carries
+# quickshell's app id and can't have one of its own. a desktop entry is found by
+# that id and yours wins over the system's, so this one is what names it and gives
+# it its icon in the dock, the launcher, the window switcher and the bar
+if [[ -f "$SHELL_DIR/lucidprefs/settings.svg" ]]; then
+    APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+    mkdir -p "$APPS_DIR"
+    cat > "$APPS_DIR/org.quickshell.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Lucid Settings
+Comment=Change how Lucid looks and works
+Exec=qs ipc call settings open
+Icon=$SHELL_DIR/lucidprefs/settings.svg
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=settings;preferences;options;configure;
+EOF
+    say "  lucid settings -> app launcher, its own icon"
+fi
+
+# the shell loads its bundled font itself, but the apps the environment page
+# dresses (and its font picker) only see what fontconfig knows. google sans
+# flex is the OFL release, so it may ship; the proprietary google sans may not
+if [[ -f "$SRC/assets/fonts/GoogleSansFlex.ttf" ]]; then
+    FONT_DIR="$HOME/.local/share/fonts/lucid"
+    mkdir -p "$FONT_DIR"
+    install -m644 "$SRC/assets/fonts/GoogleSansFlex.ttf" "$FONT_DIR/GoogleSansFlex.ttf"
+    install -m644 "$SRC/assets/fonts/OFL-GoogleSansFlex.txt" "$FONT_DIR/OFL-GoogleSansFlex.txt"
+    fc-cache -f "$FONT_DIR" &>/dev/null || true
+    say "  google sans flex -> $FONT_DIR"
+fi
+
+# the launcher sits outside the shell tree so autostart can reach it whether or
+# not the Hyprland config was installed. it picks the Qt scene graph backend
+# before exec'ing quickshell — see support/lucid/launch-shell.sh
+if [[ -f "$SRC/support/lucid/launch-shell.sh" ]]; then
+    mkdir -p "$LUCID_DIR"
+    install -m755 "$SRC/support/lucid/launch-shell.sh" "$LUCID_DIR/launch-shell.sh"
+    say "  shell launcher -> $LUCID_DIR/launch-shell.sh"
+else
+    warn "support/lucid/launch-shell.sh missing, autostart will run quickshell directly"
+fi
+
+# state files. a re-run keeps your settings: anything already in place wins,
+# then whatever the previous install left in the backup, and only failing both
+# does the shipped default get written
+seed() {
+    local src="$SRC/defaults/$1" dest="$SHELL_DIR/$2"
+    mkdir -p "$(dirname "$dest")"
+    if [[ -s "$dest" ]]; then
+        say "  ${dim}keeping existing $2${r}"
+    elif [[ -n "$BACKUP" && -s "$BACKUP/$2" ]]; then
+        cp "$BACKUP/$2" "$dest"
+        say "  carried over $2"
+    else
+        cp "$src" "$dest"
+        say "  seeded $2"
+    fi
+}
+
+# pinned dock apps are detected rather than shipped: a fixed list pins apps the
+# machine does not have, and the dock can only draw a letter tile for those
+detect_pinned() {
+    local dirs=(
+        /usr/share/applications
+        "$HOME/.local/share/applications"
+        /var/lib/flatpak/exports/share/applications
+        "$HOME/.local/share/flatpak/exports/share/applications"
+    )
+    # the shipped dock lineup, in dock order. one entry per slot and first
+    # match wins, so a machine without Lucid's default app still gets that
+    # slot filled by whatever equivalent it does have
+    local slots=(
+        "zen zen-browser app.zen_browser.zen firefox librewolf chromium brave-browser google-chrome-stable"
+        "vscodium codium code code-oss com.visualstudio.code zed dev.zed.Zed"
+        "spotify com.spotify.Client spotify-launcher"
+        "vesktop dev.vencord.Vesktop discord com.discordapp.Discord webcord"
+        "lucid.lumen org.gnome.Nautilus nautilus org.kde.dolphin dolphin thunar nemo pcmanfm-qt pcmanfm"
+        "steam com.valvesoftware.Steam"
+        "proton.vpn.app.gtk protonvpn-app"
+        "kitty alacritty foot org.wezfurlong.wezterm Alacritty com.mitchellh.ghostty"
+    )
+    local out="" found=0
+    for slot in "${slots[@]}"; do
+        for cand in $slot; do
+            local f=""
+            for d in "${dirs[@]}"; do
+                [[ -f "$d/$cand.desktop" ]] && { f="$d/$cand.desktop"; break; }
+            done
+            [[ -n "$f" ]] || continue
+
+            local name icon exec wm
+            name=$(sed -n 's/^Name=//p'           "$f" | head -n1)
+            icon=$(sed -n 's/^Icon=//p'           "$f" | head -n1)
+            # strip desktop field codes, then drop any option left holding
+            # nothing (Exec=spotify --uri=%u would otherwise pin "--uri=")
+            exec=$(sed -n 's/^Exec=//p' "$f" | head -n1 \
+                | sed -E 's/%[fFuUdDnNickvm]//g; s/ +-[^ ]*=( |$)/\1/g; s/  +/ /g; s/ +$//')
+            wm=$(  sed -n 's/^StartupWMClass=//p' "$f" | head -n1)
+            [[ -n "$name" && -n "$exec" ]] || continue
+            # StartupWMClass is an X11 hint. a wayland-native app reports its
+            # application-id instead, which is the reverse-dns desktop name -
+            # trusting the hint there pins an id no window ever matches
+            if [[ "$cand" == *.*.* ]]; then
+                wm="$cand"
+            else
+                [[ -n "$wm" ]] || wm="$cand"
+            fi
+            [[ -n "$icon" ]] || icon="$cand"
+            # escape for json
+            esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+            [[ $found -eq 1 ]] && out+=","
+            out+=$(printf '\n        {\n            "appId": "%s",\n            "appKey": "%s",\n            "command": "%s",\n            "iconName": "%s",\n            "name": "%s"\n        }' \
+                "$(esc "$wm")" "$(esc "$cand")" "$(esc "$exec")" "$(esc "$icon")" "$(esc "$name")")
+            found=1
+            break
+        done
+    done
+    [[ $found -eq 1 ]] || return 1
+    printf '{\n    "pinnedApps": [%s\n    ]\n}\n' "$out"
+}
+
+seed_pinned() {
+    local dest="$SHELL_DIR/luciddocks/pinned.json"
+    mkdir -p "$(dirname "$dest")"
+    if [[ -s "$dest" ]]; then
+        say "  ${dim}keeping existing luciddocks/pinned.json${r}"
+    elif [[ -n "$BACKUP" && -s "$BACKUP/luciddocks/pinned.json" ]]; then
+        cp "$BACKUP/luciddocks/pinned.json" "$dest"
+        say "  carried over luciddocks/pinned.json"
+    elif detect_pinned > "$dest.tmp" 2>/dev/null && [[ -s "$dest.tmp" ]]; then
+        mv "$dest.tmp" "$dest"
+        say "  pinned $(grep -c '"appId"' "$dest") installed apps to the dock"
+    else
+        rm -f "$dest.tmp"
+        cp "$SRC/defaults/pinned.json" "$dest"
+        say "  seeded luciddocks/pinned.json (defaults)"
+    fi
+}
+
+seed prefs.json            lucidprefs/prefs.json
+seed blur.json             lucidbar/blur.json
+seed clock_reminders.json  lucidbar/clock_reminders.json
+seed mpris_shazam.json     lucidbar/mpris_shazam.json
+seed_pinned
+# a dock pinned before lumen has nautilus as its files app. that pin becomes
+# lumen, in the same place, unless lumen is pinned already
+migrate_files_pin() {
+    local pins="$SHELL_DIR/luciddocks/pinned.json"
+    local entry="${XDG_DATA_HOME:-$HOME/.local/share}/applications/lucid.lumen.desktop"
+    [[ -s "$pins" && -f "$entry" ]] || return 0
+    grep -qi 'nautilus' "$pins" || return 0
+    python3 - "$pins" "$entry" <<'PY' || return 0
+import json, re, sys
+pins, entry = sys.argv[1:3]
+d = json.load(open(pins, encoding="utf-8"))
+apps = d.get("pinnedApps", [])
+def is_nautilus(p):
+    ids = (p.get("appId", "") + " " + p.get("appKey", "")).lower()
+    return "nautilus" in ids or re.match(r"\s*nautilus\b", p.get("command", "")) is not None
+if any(p.get("appId") == "lucid.lumen" for p in apps):
+    sys.exit(1)
+at = next((i for i, p in enumerate(apps) if is_nautilus(p)), -1)
+if at < 0:
+    sys.exit(1)
+keys = {}
+for line in open(entry, encoding="utf-8"):
+    if line.startswith("[") and keys:
+        break
+    k, _, v = line.rstrip("\n").partition("=")
+    keys.setdefault(k, v)
+cmd = re.sub(r"\s*%[fFuUdDnNickvm]", "", keys.get("Exec", "")).strip()
+apps[at] = {"appId": "lucid.lumen", "appKey": "lucid.lumen", "command": cmd,
+            "iconName": keys.get("Icon", "lucid.lumen"), "name": keys.get("Name", "Lumen")}
+json.dump(d, open(pins, "w", encoding="utf-8"), indent=4)
+PY
+    say "  the dock's files pin is lumen now (it was nautilus)"
+}
+migrate_files_pin
+seed usage.json            luciddocks/usage.json
+seed wallpaper.json        luciddocks/wallpaper.json
+seed moji-config.json      lucidmoji/config.json
+seed moji-state.json       lucidmoji/state.json
+seed keys-state.json       lucidkeys/state.json
+seed widgets.json          lucidwidgets/widgets.json
+# where the desktop icons sit, and the timers and stopwatch that are running,
+# have no shipped default: they are only carried over
+for state in luciddesktop/icons.json lucidbar/chrono.json; do
+    if [[ ! -s "$SHELL_DIR/$state" && -n "$BACKUP" && -s "$BACKUP/$state" ]]; then
+        mkdir -p "$(dirname "$SHELL_DIR/$state")"
+        cp "$BACKUP/$state" "$SHELL_DIR/$state"
+        say "  carried over $state"
+    fi
+done
+
+# the media visualiser runs `cava -p ~/.config/cava/quickshell.conf`. without
+# that file cava falls back to its own defaults, which emit ncurses output
+# instead of the raw ascii frames the bar strip parses - the strip then reads
+# one enormous bar and draws it as a circle across the whole popup. not part of
+# --no-look: this backs a shell feature, it is not a taste preference.
+CAVA_CFG="$HOME/.config/cava/quickshell.conf"
+mkdir -p "$(dirname "$CAVA_CFG")"
+if [[ ! -f "$CAVA_CFG" ]]; then
+    cp "$SRC/support/cava/quickshell.conf" "$CAVA_CFG"
+    say "  cava visualiser config -> ~/.config/cava/quickshell.conf"
+elif cmp -s "$SRC/support/cava/quickshell.conf" "$CAVA_CFG"; then
+    say "  ${dim}keeping cava/quickshell.conf${r}"
+else
+    cp "$CAVA_CFG" "$CAVA_CFG.backup-$STAMP"
+    cp "$SRC/support/cava/quickshell.conf" "$CAVA_CFG"
+    say "  cava/quickshell.conf refreshed (yours -> quickshell.conf.backup-$STAMP)"
+fi
+
+# the Environment page writes the Qt half of the appearance - style, icon theme
+# and fonts - into qt6ct.conf, and the shipped modules/env.lua exports
+# QT_QPA_PLATFORMTHEME=qt6ct so Qt apps read it. envtool.py deliberately never
+# creates that file: it refuses to conjure a config for a toolkit the machine
+# does not use. so on a fresh machine the page's Qt switch is a silent no-op
+# until something writes one. minimal on purpose - the page fills in the style,
+# icons and fonts itself on the first apply. its file dialogs are lumen's,
+# through the portal, like every other app's (lucidlumen/lumen --portal).
+QT6CT_CFG="$HOME/.config/qt6ct/qt6ct.conf"
+if ! command -v qt6ct &>/dev/null; then
+    say "  ${dim}qt6ct is not installed - the Environment page will skip Qt${r}"
+elif [[ -f "$QT6CT_CFG" ]]; then
+    say "  ${dim}keeping qt6ct/qt6ct.conf${r}"
+else
+    mkdir -p "$(dirname "$QT6CT_CFG")"
+    printf '[Appearance]\nstyle=Fusion\nstandard_dialogs=xdgdesktopportal\n' > "$QT6CT_CFG"
+    say "  qt6ct.conf -> ~/.config/qt6ct/qt6ct.conf"
+fi
+
+# --------------------------------------------------- notification ownership
+
+# org.freedesktop.Notifications is a single-owner D-Bus name and Lucid's bar
+# serves it. Any other notification daemon that is merely *installed* can be
+# D-Bus-activated the moment something posts a notification - it does not have
+# to be autostarted - and whoever claims the name first keeps it for the whole
+# session. Lose that race and Lucid's toasts silently never appear: you get the
+# other daemon's notification instead, while the bar looks perfectly fine.
+
+step "Checking who serves notifications"
+
+NOTIFY_RIVALS=()
+for f in /usr/share/dbus-1/services/*.service "$HOME/.local/share/dbus-1/services/"*.service; do
+    [[ -f "$f" ]] || continue
+    grep -q '^Name=org.freedesktop.Notifications' "$f" || continue
+    grep -qi 'quickshell' "$f" && continue
+    NOTIFY_RIVALS+=("$f")
+done
+
+if [[ ${#NOTIFY_RIVALS[@]} -eq 0 ]]; then
+    say "  ${dim}nothing else claims the name — Lucid's notifications win${r}"
+else
+    for f in "${NOTIFY_RIVALS[@]}"; do
+        unit=$(sed -n 's/^SystemdService=//p' "$f" | head -n1)
+        exe=$(sed -n 's/^Exec=//p' "$f" | head -n1 | awk '{print $1}')
+        say "  ${ylw}$(basename "$exe")${r} also claims org.freedesktop.Notifications"
+        say "  ${dim}($f)${r}"
+    done
+    say "  D-Bus starts it on the first notification, and it then keeps the"
+    say "  name for the session — Lucid's own notifications never show."
+
+    if ask "  Stop it taking over?"; then
+        for f in "${NOTIFY_RIVALS[@]}"; do
+            unit=$(sed -n 's/^SystemdService=//p' "$f" | head -n1)
+            exe=$(sed -n 's/^Exec=//p' "$f" | head -n1 | awk '{print $1}')
+            base=$(basename "$exe")
+            if [[ -n "$unit" ]] && command -v systemctl &>/dev/null; then
+                systemctl --user mask "$unit" &>/dev/null \
+                    && say "  masked $unit (undo: systemctl --user unmask $unit)" \
+                    || warn "  could not mask $unit — uninstall $base instead"
+            else
+                warn "  $base has no systemd unit to mask — uninstall it to be rid of it"
+            fi
+            # it may already hold the name in this session; the mask only
+            # stops the next activation, so drop the running one too
+            if pgrep -x "$base" &>/dev/null; then
+                pkill -x "$base" &>/dev/null || true
+                say "  stopped the running $base"
+            fi
+        done
+        say "  ${dim}restart Lucid (or log back in) so it claims the name${r}"
+    else
+        warn "  left alone — expect its notifications instead of Lucid's"
+    fi
+fi
+
+# ------------------------------------------------------------------ hyprland
+
+# binds, window rules, blur, animations and autostart. this is a whole session
+# config, so an existing one is always backed up first and replacing it is a
+# question - except when it is Lucid's own from an earlier run, which is just
+# refreshed. kept out of the theming step: the modules read no palette, so
+# --no-theming should not cost you the binds.
+HYPR_DIR="$HOME/.config/hypr"
+HYPR_LUA_INSTALLED=0
+
+# one of Lucid's modules into a hyprland.lua that is not Lucid's own: the file,
+# and its require line once, the config backed up before its first change
+add_hypr_module() {
+    local name=$1 from=$2
+    mkdir -p "$HYPR_DIR/modules"
+    cp "$from" "$HYPR_DIR/modules/$name.lua"
+    if grep -qF "require(\"modules.$name\")" "$HYPR_DIR/hyprland.lua"; then
+        say "  ${dim}hyprland.lua already requires modules.$name${r}"
+    else
+        [[ -f "$HYPR_DIR/hyprland.lua.backup-$STAMP" ]] \
+            || cp "$HYPR_DIR/hyprland.lua" "$HYPR_DIR/hyprland.lua.backup-$STAMP"
+        printf '\nrequire("modules.%s")\n' "$name" >> "$HYPR_DIR/hyprland.lua"
+        say "  hyprland.lua now requires modules.$name"
+    fi
+}
+
+# what each module was when Lucid installed it, so a refresh can tell a module
+# you changed from one an older release shipped
+HYPR_SHIPPED="$HYPR_DIR/modules/.lucid-shipped"
+
+# the cursor that tilts as it moves, and grows for a moment when ctrl is tapped
+# on its own to find it, is a Hyprland plugin (hypr-dynamic-cursors).
+# scripts/cursor-plugin.sh compiles it against the headers the hyprland package
+# itself installs, so the build always matches the Hyprland it is for, and
+# modules/autostart.lua runs the same script on login to load it - rebuilding
+# first when Hyprland has changed. hyprpm is not involved: it keeps its own
+# copy of the headers, calls them current as long as the commit matches, and
+# after a library update under the same Hyprland builds plugins that are
+# refused with "version mismatch" until it is forced. none of this is fatal:
+# a failed build leaves a cursor that simply does not tilt or grow
+CURSOR_PLUGIN="$HYPR_DIR/scripts/cursor-plugin.sh"
+setup_cursor_plugin() {
+    local so="${XDG_DATA_HOME:-$HOME/.local/share}/lucid/plugins/dynamic-cursors.so"
+    local in_hypr=0
+    [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && in_hypr=1
+
+    # built on an earlier run: bring it up to date, which is a no-op when it is
+    if [[ -f "$so" ]]; then
+        if [[ $in_hypr -eq 1 ]]; then
+            if "$CURSOR_PLUGIN" ensure; then
+                say "  cursor plugin up to date and loaded"
+            else
+                warn "  the cursor plugin did not load — see: $CURSOR_PLUGIN status"
+            fi
+        else
+            say "  ${dim}cursor plugin already built; it is loaded on login${r}"
+        fi
+        return 0
+    fi
+
+    say "  modules/plugins.lua is set up for a cursor that tilts as it moves and"
+    say "  grows when you tap Ctrl to find it (hypr-dynamic-cursors). it is compiled"
+    say "  here, for your Hyprland."
+    ask "  Build it now (about a minute, no password needed)?" || {
+        say "  ${dim}skipped — later: $CURSOR_PLUGIN build && $CURSOR_PLUGIN load${r}"
+        return 0
+    }
+
+    # the plugin's makefile, and the clone before it
+    local need=() p
+    { command -v make && command -v g++ && command -v pkg-config; } &>/dev/null || need+=(base-devel)
+    command -v git &>/dev/null || need+=(git)
+    if (( ${#need[@]} )); then
+        if [[ $SKIP_DEPS -eq 1 ]]; then
+            warn "  the cursor plugin needs ${need[*]} (--skip-deps, not installing)"
+            return 0
+        fi
+        sudo pacman -S --needed --noconfirm "${need[@]}" || {
+            warn "  could not install ${need[*]} — the cursor plugin is left out"
+            return 0
+        }
+    fi
+
+    "$CURSOR_PLUGIN" build || {
+        warn "  the cursor plugin did not build — everything else is unaffected"
+        return 0
+    }
+    if [[ $in_hypr -eq 0 ]]; then
+        say "  cursor plugin built; modules/autostart.lua loads it on login"
+    elif "$CURSOR_PLUGIN" load; then
+        say "  cursor plugin loaded; modules/autostart.lua loads it on every login"
+    else
+        warn "  the cursor plugin built but did not load — see: $CURSOR_PLUGIN status"
+    fi
+
+    # a copy hyprpm still has would be loaded a second time by anyone who
+    # runs hyprpm reload at login
+    if [[ -f "/var/cache/hyprpm/$USER/dynamic-cursors/state.toml" ]]; then
+        say "  ${dim}hyprpm has a copy of this plugin too; it is no longer needed (hyprpm remove dynamic-cursors)${r}"
+    fi
+}
+
+if [[ $WITH_HYPR -eq 1 ]]; then
+    step "Setting up Hyprland"
+
+    HAS_HYPR_CFG=0
+    [[ -f "$HYPR_DIR/hyprland.lua" || -f "$HYPR_DIR/hyprland.conf" ]] && HAS_HYPR_CFG=1
+
+    # a config we installed on an earlier run is not "someone else's config":
+    # without telling them apart, a re-run asks to replace Lucid's own setup and
+    # then tells you to add binds you already have
+    HYPR_IS_LUCID=0
+    if [[ -f "$HYPR_DIR/modules/binds.lua" ]] && grep -q 'qs ipc call' "$HYPR_DIR/modules/binds.lua" 2>/dev/null; then
+        HYPR_IS_LUCID=1
+    fi
+
+    DO_HYPR=1
+    if [[ $HYPR_IS_LUCID -eq 1 ]]; then
+        say "  ${dim}already Lucid's — refreshing it${r}"
+    elif [[ $HAS_HYPR_CFG -eq 1 && $HYPR_FORCE -eq 0 ]]; then
+        say "  you already have a Hyprland config. Lucid's brings the binds,"
+        say "  window rules, blur and animations, and yours is backed up first."
+        if ! ask "  Replace it with Lucid's?"; then
+            DO_HYPR=0
+            say "  ${dim}left alone — re-run with --with-hypr to change your mind${r}"
+        fi
+    fi
+
+    # the lua config only exists from Hyprland 0.55. an older one reads
+    # hyprland.conf and ignores hyprland.lua, so replacing the config would
+    # leave it with nothing but its own defaults - worth asking first.
+    # `hyprctl version` prints "Hyprland 0.54.0 built from ..." with no v,
+    # so the number is taken bare and compared as a number
+    if [[ $DO_HYPR -eq 1 ]] && command -v hyprctl &>/dev/null; then
+        HYPR_VER=$(hyprctl version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+        if [[ -n "$HYPR_VER" ]]; then
+            IFS=. read -r hv_major hv_minor _ <<< "$HYPR_VER"
+            if (( hv_major == 0 && hv_minor < 55 )); then
+                warn "  Hyprland $HYPR_VER predates the lua config (0.55+) — it will ignore hyprland.lua"
+                if ! ask "  Install it anyway?"; then
+                    DO_HYPR=0
+                    say "  ${dim}left alone — update Hyprland, then re-run with --with-hypr${r}"
+                fi
+            fi
+        fi
+    fi
+
+    # a config of your own still gets the one module lumen's file dialogs need
+    # (modules/lumen.lua): every app's open and save dialog is lumen either way,
+    # and without it they tile and gtk 3 apps keep their own
+    if [[ $DO_HYPR -eq 0 && -f "$HYPR_DIR/hyprland.lua" ]]; then
+        add_hypr_module lumen "$SRC/support/hypr/modules/lumen.lua"
+    fi
+
+    if [[ $DO_HYPR -eq 1 ]]; then
+        if [[ $HAS_HYPR_CFG -eq 1 ]]; then
+            cp -r "$HYPR_DIR" "$HYPR_DIR.backup-$STAMP"
+            say "  your hypr config -> $HYPR_DIR.backup-$STAMP"
+        fi
+        # none: Hyprland writes its own default once Lucid's is moved aside
+        if [[ $HYPR_IS_LUCID -eq 0 ]]; then
+            if [[ $HAS_HYPR_CFG -eq 1 ]]; then remember hypr "$HYPR_DIR.backup-$STAMP"; else remember hypr none; fi
+        fi
+        mkdir -p "$HYPR_DIR/modules" "$HYPR_DIR/scripts"
+        # on a refresh every module is checked against the one in place, so it
+        # can say what it changed: a module new in this release, one a release
+        # changed, and one you edited yourself, which is replaced as well but
+        # named, its edit kept in the backup. the modules Settings writes
+        # (lucid-*.lua) are not Lucid's to ship and are never touched
+        hypr_new=(); hypr_changed=(); hypr_edited=(); hypr_same=0
+        if [[ $HYPR_IS_LUCID -eq 1 ]]; then
+            for f in "$SRC/support/hypr/modules/"*.lua; do
+                m=$(basename "$f")
+                if [[ ! -f "$HYPR_DIR/modules/$m" ]]; then
+                    hypr_new+=("$m")
+                elif cmp -s "$f" "$HYPR_DIR/modules/$m"; then
+                    hypr_same=$((hypr_same + 1))
+                elif [[ -f "$HYPR_SHIPPED" ]] \
+                     && ! grep -qxF "$(sha256sum < "$HYPR_DIR/modules/$m" | cut -d' ' -f1)  $m" "$HYPR_SHIPPED"; then
+                    hypr_edited+=("$m")
+                else
+                    hypr_changed+=("$m")
+                fi
+            done
+        fi
+        cp "$SRC/support/hypr/hyprland.lua" "$HYPR_DIR/hyprland.lua"
+        cp "$SRC/support/hypr/modules/"*.lua "$HYPR_DIR/modules/"
+        (cd "$SRC/support/hypr/modules" && sha256sum -- *.lua) > "$HYPR_SHIPPED"
+        install -m755 "$SRC/support/hypr/scripts/reload.sh" "$HYPR_DIR/scripts/reload.sh"
+        install -m755 "$SRC/support/hypr/scripts/cursor-plugin.sh" "$HYPR_DIR/scripts/cursor-plugin.sh"
+        # the keyboard already typed on, so Hyprland does not start in US:
+        # GNOME's input sources, else KDE's, else the system's. Settings > Input still wins
+        KB_LAYOUT=""; KB_VARIANT=""
+        kb_gnome=$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null | grep -o "'xkb', '[^']*'" | cut -d"'" -f4 || true)
+        if [[ -n "$kb_gnome" ]]; then
+            # us+intl is layout us, variant intl
+            while read -r e; do
+                KB_LAYOUT+=",${e%%+*}"
+                if [[ $e == *+* ]]; then KB_VARIANT+=",${e#*+}"; else KB_VARIANT+=","; fi
+            done <<< "$kb_gnome"
+            KB_LAYOUT=${KB_LAYOUT#,}; KB_VARIANT=${KB_VARIANT#,}
+        elif grep -qs '^LayoutList=.' "$HOME/.config/kxkbrc"; then
+            KB_LAYOUT=$(sed -n 's/^LayoutList=//p' "$HOME/.config/kxkbrc" | head -1)
+            KB_VARIANT=$(sed -n 's/^VariantList=//p' "$HOME/.config/kxkbrc" | head -1)
+        else
+            KB_LAYOUT=$(localectl status 2>/dev/null | sed -n 's/^ *X11 Layout: //p' || true)
+            KB_VARIANT=$(localectl status 2>/dev/null | sed -n 's/^ *X11 Variant: //p' || true)
+        fi
+        # xkb names only, since they go into a sed and a lua string
+        if [[ $KB_LAYOUT =~ ^[A-Za-z0-9_,-]+$ && $KB_VARIANT =~ ^[A-Za-z0-9_,-]*$ && "$KB_LAYOUT/$KB_VARIANT" != "us/" ]]; then
+            sed -i -E "s/^([[:space:]]*kb_layout  = )\"[^\"]*\"/\1\"$KB_LAYOUT\"/; s/^([[:space:]]*kb_variant = )\"[^\"]*\"/\1\"$KB_VARIANT\"/" "$HYPR_DIR/modules/input.lua"
+            say "  keyboard        $KB_LAYOUT, as on this system"
+        fi
+        # a hyprland.conf left beside hyprland.lua is ambiguous - Hyprland
+        # reads one of them and you cannot tell which, so the install looks
+        # like it did nothing. the full directory is already backed up above
+        if [[ -f "$HYPR_DIR/hyprland.conf" ]]; then
+            mv "$HYPR_DIR/hyprland.conf" "$HYPR_DIR/hyprland.conf.replaced-$STAMP"
+            say "  hyprland.conf -> hyprland.conf.replaced-$STAMP (lua config wins now)"
+            # a lua config cannot source a .conf, so whatever the old config
+            # pulled in - hyprmod's hyprland-gui.conf, a file of your own -
+            # stops being read here. name them, so the settings that vanish
+            # with them are not a mystery: each needs a lua module in its
+            # place (hyprmod adds require("hyprland-gui") when re-run)
+            sourced=()
+            while IFS= read -r f; do
+                [[ -n "$f" ]] && sourced+=("$f")
+            done < <(sed -nE 's/^[[:space:]]*source[[:space:]]*=[[:space:]]*//p' \
+                        "$HYPR_DIR/hyprland.conf.replaced-$STAMP" \
+                     | sed -E 's/[[:space:]]*#.*$//; s/[[:space:]]+$//' || true)
+            if (( ${#sourced[@]} )); then
+                warn "  it sourced ${#sourced[@]} file(s) that hyprland.lua will not read:"
+                for f in "${sourced[@]}"; do
+                    say "    $f"
+                done
+                say "  ${dim}a lua config cannot source .conf files. whatever wrote those needs a lua module instead — hyprmod: re-run it and accept its require(\"hyprland-gui\") line${r}"
+            fi
+        fi
+        HYPR_LUA_INSTALLED=1
+        if [[ $HYPR_IS_LUCID -eq 1 ]]; then
+            say "  checked all $(ls "$SRC/support/hypr/modules/"*.lua | wc -l) modules: $hypr_same already current"
+            (( ${#hypr_new[@]} )) && say "  new:     ${hypr_new[*]}"
+            (( ${#hypr_changed[@]} )) && say "  updated: ${hypr_changed[*]}"
+            if (( ${#hypr_edited[@]} )); then
+                warn "  you had edited ${hypr_edited[*]} — now Lucid's again"
+                say "  ${dim}your versions are in $HYPR_DIR.backup-$STAMP/modules${r}"
+            fi
+        else
+            say "  hyprland.lua + $(ls "$SRC/support/hypr/modules/"*.lua | wc -l) modules -> $HYPR_DIR"
+        fi
+        say "  ${dim}binds, window rules, blur, animations and autostart come with it${r}"
+        # a refresh replaces hyprland.lua whole, but a require added to it
+        # since the last run - hyprmod's require("hyprland-gui"), a module
+        # of your own - is not Lucid's to drop. those lines go back in,
+        # after Lucid's, so what they set still wins. only on a refresh:
+        # a config replaced on request was meant to go
+        if [[ $HYPR_IS_LUCID -eq 1 && -f "$HYPR_DIR.backup-$STAMP/hyprland.lua" ]]; then
+            carried=()
+            while IFS= read -r line; do
+                grep -qxF -- "$line" "$HYPR_DIR/hyprland.lua" && continue
+                printf '%s\n' "${carried[@]:-}" | grep -qxF -- "$line" && continue
+                carried+=("$line")
+            done < <(grep -E '^[[:space:]]*(pcall[[:space:]]*\([[:space:]]*)?(require|dofile)[[:space:]]*[(,]' \
+                        "$HYPR_DIR.backup-$STAMP/hyprland.lua" || true)
+            if (( ${#carried[@]} )); then
+                {
+                    printf '\n-- kept by the Lucid installer: these were added to hyprland.lua after it was installed\n'
+                    printf '%s\n' "${carried[@]}"
+                } >> "$HYPR_DIR/hyprland.lua"
+                say "  kept ${#carried[@]} require line(s) added to hyprland.lua since the last install"
+            fi
+        fi
+
+        # modules/binds.lua binds from this list, which Settings -> Keybinds
+        # edits. an existing one is yours and survives the refresh
+        mkdir -p "$LUCID_DIR"
+        if [[ -s "$LUCID_DIR/keybinds.json" ]]; then
+            say "  ${dim}keeping existing $LUCID_DIR/keybinds.json${r}"
+            # SUPER+E ran nautilus before lumen. still set to that it is the old
+            # default rather than a choice, so it opens lumen now; a file manager
+            # you picked yourself stays
+            if grep -qE '"cmd"[[:space:]]*:[[:space:]]*"nautilus( --new-window)?"' "$LUCID_DIR/keybinds.json"; then
+                # the file is one bind a line, as Settings writes it, so only that
+                # line changes and the rest of the file stays exactly as it was
+                if python3 - "$LUCID_DIR/keybinds.json" <<'PY'
+import json, re, sys
+path = sys.argv[1]
+lumen = "$HOME/.config/quickshell/lucidlumen/lumen"
+lines = open(path, encoding="utf-8").read().split("\n")
+cmd = re.compile(r'("cmd"\s*:\s*)"nautilus( --new-window)?"')
+hits = [i for i, l in enumerate(lines) if re.search(r'"id"\s*:\s*"files"', l) and cmd.search(l)]
+if len(hits) != 1:
+    sys.exit(1)
+lines[hits[0]] = cmd.sub(lambda m: m.group(1) + json.dumps(lumen), lines[hits[0]], count=1)
+text = "\n".join(lines)
+data = json.loads(text)
+binds = data.get("binds", []) if isinstance(data, dict) else data
+if not any(isinstance(b, dict) and b.get("id") == "files" and b.get("cmd") == lumen for b in binds):
+    sys.exit(1)
+open(path, "w", encoding="utf-8").write(text)
+PY
+                then
+                    say "  SUPER+E opens lumen now (it opened nautilus)"
+                else
+                    say "  ${dim}SUPER+E still opens nautilus; Settings > Keybinds can point it at lumen${r}"
+                fi
+            fi
+            # SUPER+V only toggled floating before it gave a window a size. still
+            # that plain toggle it is the old default rather than a choice, so it
+            # takes the shipped one; a float bind you changed yourself stays
+            if python3 - "$LUCID_DIR/keybinds.json" "$SRC/support/hypr/keybinds.json" <<'PY'
+import json, re, sys
+path, shipped = sys.argv[1:3]
+old = json.dumps('hl.dsp.window.float({ action = "toggle" })')
+new = next(b["lua"] for b in json.load(open(shipped, encoding="utf-8"))["binds"] if b.get("id") == "float")
+lines = open(path, encoding="utf-8").read().split("\n")
+hits = [i for i, l in enumerate(lines) if re.search(r'"id"\s*:\s*"float"', l) and old in l]
+if len(hits) != 1:
+    sys.exit(1)
+lines[hits[0]] = lines[hits[0]].replace(old, json.dumps(new), 1)
+text = "\n".join(lines)
+json.loads(text)
+open(path, "w", encoding="utf-8").write(text)
+PY
+            then
+                say "  floating a window now sets it to 1366x768, centred"
+            fi
+            # Media keys used bare playerctl, whose implicit player is just the
+            # first MPRIS name. With a paused browser before Spotify, play/pause
+            # went to the browser even while Lucid showed Spotify. Still on those
+            # exact shipped commands they follow Lucid's selected player now; a
+            # media command the user changed themselves stays untouched.
+            if python3 - "$LUCID_DIR/keybinds.json" "$SRC/support/hypr/keybinds.json" <<'PY'
+import json, re, sys
+path, shipped = sys.argv[1:3]
+old = {
+    "xf86-next": "playerctl next",
+    "xf86-pause": "playerctl play-pause",
+    "xf86-play": "playerctl play-pause",
+    "xf86-prev": "playerctl previous",
+}
+new = {b["id"]: b["cmd"] for b in json.load(open(shipped, encoding="utf-8"))["binds"] if b.get("id") in old}
+text = open(path, encoding="utf-8").read()
+data = json.loads(text)
+binds = data.get("binds", []) if isinstance(data, dict) else data
+changed = [bind_id for bind_id, old_cmd in old.items()
+           if any(isinstance(b, dict) and b.get("id") == bind_id and b.get("cmd") == old_cmd for b in binds)]
+if not changed:
+    sys.exit(1)
+for bind_id in changed:
+    # Stop before another entry's id, so formatting and every other field stay
+    # byte-for-byte as they were even when an object spans several lines.
+    pattern = re.compile(r'("id"\s*:\s*' + re.escape(json.dumps(bind_id))
+                         + r'(?:(?!"id"\s*:).)*?"cmd"\s*:\s*)'
+                         + re.escape(json.dumps(old[bind_id])), re.S)
+    text, count = pattern.subn(lambda m: m.group(1) + json.dumps(new[bind_id]), text, count=1)
+    if count != 1:
+        sys.exit(1)
+data = json.loads(text)
+binds = data.get("binds", []) if isinstance(data, dict) else data
+for bind_id in changed:
+    if not any(isinstance(b, dict) and b.get("id") == bind_id and b.get("cmd") == new[bind_id] for b in binds):
+        sys.exit(1)
+open(path, "w", encoding="utf-8").write(text)
+PY
+            then
+                say "  media keys follow Lucid's active player now"
+            fi
+            # Region capture used SUPER+SHIFT+S before the scratchpad took that
+            # combination. If it is still the exact old capture default, move it
+            # to Print as the shipped list does; either bind changed by hand stays.
+            if python3 - "$LUCID_DIR/keybinds.json" "$SRC/support/hypr/keybinds.json" <<'PY'
+import json, re, sys
+path, shipped = sys.argv[1:3]
+text = open(path, encoding="utf-8").read()
+data = json.loads(text)
+binds = data.get("binds", []) if isinstance(data, dict) else data
+old_keys = "SUPER + SHIFT + S"
+old_cmd = "qs ipc call snap toggle"
+target = next(b for b in json.load(open(shipped, encoding="utf-8"))["binds"] if b.get("id") == "snap-region")
+old = next((b for b in binds if isinstance(b, dict) and b.get("id") == "snap-region"
+            and b.get("keys") == old_keys and b.get("cmd") == old_cmd), None)
+if old is None or not any(isinstance(b, dict) and b.get("id") == "scratchpad"
+                          and b.get("keys") == old_keys and b.get("enabled", True) for b in binds):
+    sys.exit(1)
+pattern = re.compile(r'("id"\s*:\s*"snap-region"(?:(?!"id"\s*:).)*?"keys"\s*:\s*)'
+                     + re.escape(json.dumps(old_keys)), re.S)
+text, count = pattern.subn(lambda m: m.group(1) + json.dumps(target["keys"]), text, count=1)
+if count != 1:
+    sys.exit(1)
+check = json.loads(text)
+check_binds = check.get("binds", []) if isinstance(check, dict) else check
+if not any(isinstance(b, dict) and b.get("id") == "snap-region"
+           and b.get("keys") == target["keys"] and b.get("cmd") == old_cmd for b in check_binds):
+    sys.exit(1)
+open(path, "w", encoding="utf-8").write(text)
+PY
+            then
+                say "  region capture moved from SUPER+SHIFT+S to Print; the scratchpad keeps SUPER+SHIFT+S"
+            fi
+        else
+            cp "$SRC/support/hypr/keybinds.json" "$LUCID_DIR/keybinds.json"
+            say "  keybinds -> $LUCID_DIR/keybinds.json"
+        fi
+
+        # modules/plugins.lua carries the settings for Hyprland plugins; each
+        # block only applies while its plugin is loaded, so without one it is inert
+        if [[ $WITH_PLUGINS -eq 1 ]]; then
+            setup_cursor_plugin
+        else
+            say "  ${dim}cursor plugin skipped (--no-plugins)${r}"
+        fi
+
+        # the binds shell out to these, so a missing one is a dead key rather
+        # than a visible error. worth saying now, not after the first F-key
+        for c in kitty playerctl gnome-calculator wpctl brightnessctl; do
+            command -v "$c" &>/dev/null || warn "  $c is missing — the binds that use it will do nothing"
+        done
+
+    fi
+else
+    step "Skipping the Hyprland config (--no-hypr)"
+    say "  ${dim}the Lucid binds and window rules are not installed${r}"
+fi
+
+# ------------------------------------------------------------------ theming
+
+if [[ $WITH_THEMING -eq 1 ]]; then
+    step "Installing the theming layer"
+
+    mkdir -p "$LUCID_DIR/themes" "$MATUGEN_DIR/templates" "$WALL_SCRIPT_DIR" "$HOME/.cache/quickshell"
+
+    cp -r "$SRC/support/lucid/themes/." "$LUCID_DIR/themes/"
+    install -m755 "$SRC/support/lucid/apply-theme.sh"      "$LUCID_DIR/apply-theme.sh"
+    install -m755 "$SRC/support/lucid/render-templates.sh" "$LUCID_DIR/render-templates.sh"
+    install -m755 "$SRC/support/lucid/templates.py"       "$LUCID_DIR/templates.py"
+    install -m755 "$SRC/support/lucid/apply-colour.sh"    "$LUCID_DIR/apply-colour.sh"
+    install -m755 "$SRC/support/lucid/wallpaper-colours.sh" "$LUCID_DIR/wallpaper-colours.sh"
+    install -m755 "$SRC/support/lucid/wallpaper-mode.sh"  "$LUCID_DIR/wallpaper-mode.sh"
+    install -m644 "$SRC/support/lucid/matugen-options.sh" "$LUCID_DIR/matugen-options.sh"
+    install -m755 "$SRC/support/lucid/gen-pywal-palette.py" "$LUCID_DIR/gen-pywal-palette.py"
+    install -m755 "$SRC/support/lucid/add-theme.py"        "$LUCID_DIR/add-theme.py"
+    install -m755 "$SRC/support/lucid/scheme-gallery.py"   "$LUCID_DIR/scheme-gallery.py"
+    install -m755 "$SRC/support/lucid/palette-edit.py"     "$LUCID_DIR/palette-edit.py"
+    install -m755 "$SRC/support/lucid/gen-light-palette.py" "$LUCID_DIR/gen-light-palette.py"
+    install -m755 "$SRC/support/lucid/app-palette.py"      "$LUCID_DIR/app-palette.py"
+    install -m755 "$SRC/support/lucid/set-mode.sh"         "$LUCID_DIR/set-mode.sh"
+    install -m755 "$SRC/support/lucid/sync-sddm.sh"        "$LUCID_DIR/sync-sddm.sh"
+    install -m755 "$SRC/support/lucid/sync-starship.sh"    "$LUCID_DIR/sync-starship.sh"
+    install -m755 "$SRC/support/lucid/setup-zen.sh"        "$LUCID_DIR/setup-zen.sh"
+    mkdir -p "$LUCID_DIR/zen" && cp -r "$SRC/support/zen/." "$LUCID_DIR/zen/"
+    install -m644 "$SRC/support/lucid/lucid_palette.py"    "$LUCID_DIR/lucid_palette.py"
+    install -m755 "$SRC/support/wallpaper/set-wallpaper.sh" "$WALL_SCRIPT_DIR/set-wallpaper.sh"
+    # rules you wrote are yours: only ever placed when there are none
+    [[ -f "$LUCID_DIR/wallpaper-outputs.conf" ]] || install -m644 "$SRC/support/lucid/wallpaper-outputs.conf" "$LUCID_DIR/wallpaper-outputs.conf"
+    # the sddm theme lives outside $HOME, so it is the one thing here that
+    # needs root. root keeps the theme; every account paints its own corner
+    # of it without a password
+    # sddm installed is not sddm in use, so the display manager that starts is
+    # what counts. moving off another one is always asked: -y alone keeps it,
+    # -y with --login-screen is the yes
+    DM_UNIT=$(readlink /etc/systemd/system/display-manager.service 2>/dev/null || true)
+    DM_UNIT=${DM_UNIT##*/}; CUR_DM=${DM_UNIT%.service}
+    # ly and xdm start without that alias, so enable -f would not replace them
+    EXTRA_DM=()
+    for u in /etc/systemd/system/multi-user.target.wants/ly@*.service /etc/systemd/system/graphical.target.wants/xdm.service; do
+        [[ -L "$u" ]] && EXTRA_DM+=("${u##*/}")
+    done
+    if [[ -z "$CUR_DM" && ${#EXTRA_DM[@]} -gt 0 ]]; then
+        CUR_DM=${EXTRA_DM[0]%%@*}; CUR_DM=${CUR_DM%.service}
+    fi
+    case $CUR_DM in
+        gdm|lxdm|xdm) DM_NAME=${CUR_DM^^} ;;
+        lightdm)      DM_NAME=LightDM ;;
+        plasmalogin)  DM_NAME="Plasma Login" ;;
+        ly)           DM_NAME=Ly ;;
+        *)            DM_NAME=$CUR_DM ;;
+    esac
+    SDDM_SWITCH=0
+    if [[ $WITH_SDDM -eq 1 && $CUR_DM != sddm ]]; then
+        if [[ $SDDM_CURRENT -eq 1 || $ASSUME_YES -eq 0 ]] \
+            && ask "  Make SDDM your login screen${DM_NAME:+ instead of $DM_NAME}, with Lucid's theme? (from the next restart)"; then
+            # enable -f takes over the display-manager alias; the running one is left alone
+            if sudo pacman -S --needed --noconfirm sddm && sudo systemctl enable -f sddm.service \
+                && { [[ ${#EXTRA_DM[@]} -eq 0 ]] || sudo systemctl disable "${EXTRA_DM[@]}"; }; then
+                SDDM_SWITCH=1
+                SDDM_CURRENT=1
+                # the units uninstall.sh enables again; none = nothing started at boot
+                DM_BEFORE=$(echo $DM_UNIT "${EXTRA_DM[@]}")
+                remember dm "${DM_BEFORE:-none}"
+            else
+                warn "could not switch the login screen to sddm; skipping its theme"
+                WITH_SDDM=0
+            fi
+        else
+            WITH_SDDM=0
+            say "  ${dim}login screen left as it is${DM_NAME:+ ($DM_NAME)}, without Lucid's theme${r}"
+        fi
+    fi
+    if [[ $WITH_SDDM -eq 1 ]]; then
+        SDDM_THEME_DIR=/usr/share/sddm/themes/lucid
+        # a fingerprint at the login screen needs two lines in sddm's pam
+        # service, so it is asked for once and then kept on every re-run
+        SDDM_FINGER=()
+        if [[ -e /usr/lib/security/pam_fprintd.so ]]; then
+            if grep -q '^# >>> lucid: fingerprint login' /etc/pam.d/sddm 2>/dev/null; then
+                SDDM_FINGER=(--fingerprint)
+            elif ask "  Let the login screen take a fingerprint too? (two lines in /etc/pam.d/sddm, backed up first)"; then
+                SDDM_FINGER=(--fingerprint)
+            fi
+        fi
+        SDDM_SET=()
+        [[ $SDDM_CURRENT -eq 0 ]] || SDDM_SET=(--current)
+        if sudo bash "$SRC/support/sddm/install-theme.sh" "$SDDM_THEME_DIR" "${SDDM_FINGER[@]}" "${SDDM_SET[@]}"; then
+            say "  sddm theme      -> $SDDM_THEME_DIR"
+            # the theme no longer carries a shared wallpaper, so paint this
+            # account's corner now rather than at its next login. it reads
+            # the palette through qs, which needs the session's display
+            if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+                "$LUCID_DIR/sync-sddm.sh" --missing &>/dev/null || true
+            fi
+            # /etc/sddm.conf outranks /etc/sddm.conf.d, so point at the file
+            # that actually wins rather than at the tidier-looking drop-in
+            if [[ $SDDM_SWITCH -eq 1 ]]; then
+                say "    sddm is your login screen from the next restart, with this theme"
+            elif [[ $SDDM_CURRENT -eq 1 ]]; then
+                say "    the login screen shows it from the next login"
+            else
+                say "    enable it with: Current=lucid under [Theme] in /etc/sddm.conf (or --login-screen)"
+            fi
+        else
+            warn "could not install the sddm theme (needs sudo); skipping"
+        fi
+    fi
+
+    say "  theme palettes  -> $LUCID_DIR/themes"
+    say "  theme scripts   -> $LUCID_DIR"
+    say "  wallpaper hook  -> $WALL_SCRIPT_DIR/set-wallpaper.sh"
+
+    cp -r "$SRC/support/matugen/templates/." "$MATUGEN_DIR/templates/"
+    say "  matugen templates -> $MATUGEN_DIR/templates/"
+
+    MATUGEN_CFG="$MATUGEN_DIR/config.toml"
+    [[ -f "$MATUGEN_CFG" ]] && cp "$MATUGEN_CFG" "$MATUGEN_CFG.backup-$STAMP"
+    [[ -f "$MATUGEN_CFG" ]] || printf '[config]\n' > "$MATUGEN_CFG"
+
+    TPL='~/.config/matugen/templates'
+    MG_ADDED=(); MG_KEPT=(); MG_SKIPPED=()
+
+    # older installs gave starship a matugen template, which wrote the whole
+    # starship.toml and so replaced any prompt the user had made. only its
+    # palette is repainted now (sync-starship.sh), so Lucid's own block goes;
+    # a starship block pointing anywhere else is the user's and stays
+    if grep -q '^\[templates\.starship\]' "$MATUGEN_CFG"; then
+        awk '
+            function flush() { if (!(inblk && lucid)) printf "%s", blk; blk = ""; inblk = 0; lucid = 0 }
+            /^\[/ { flush(); if ($0 ~ /^\[templates\.starship\]/) inblk = 1 }
+            { blk = blk $0 "\n"; if (inblk && $0 ~ /starship-colors\.toml/) lucid = 1 }
+            END { flush() }
+        ' "$MATUGEN_CFG" > "$MATUGEN_CFG.lucid-tmp" && cat "$MATUGEN_CFG.lucid-tmp" > "$MATUGEN_CFG"
+        rm -f "$MATUGEN_CFG.lucid-tmp"
+    fi
+
+    # firefox and zen keep their chrome css inside a generated profile dir, so
+    # the path has to be discovered rather than assumed. zen's comes from its
+    # installs.ini: an empty *.Default* folder it never opens often sorts first
+    FF_PROFILE=$(find "$HOME/.mozilla/firefox" -maxdepth 1 -type d -name '*.default-release' 2>/dev/null | head -1 || true)
+    ZEN_PROFILE=$("$LUCID_DIR/setup-zen.sh" profile 2>/dev/null || true)
+    # a zen that has never run has no profile, and on a fresh install that is
+    # every one: nothing here would add its colours and nothing would later. one
+    # start with no window makes the profile its first launch would have
+    if [[ -z "$ZEN_PROFILE" ]] && "$LUCID_DIR/setup-zen.sh" first-run 2>/dev/null; then
+        ZEN_PROFILE=$("$LUCID_DIR/setup-zen.sh" profile 2>/dev/null || true)
+        say "  zen -> made its profile, so it opens in your colours"
+    fi
+
+    # zen's colours used to be rendered straight into userChrome.css, which
+    # replaced anything the user kept there, and sometimes into the wrong
+    # profile. Lucid's block now writes lucid-zen.css in the profile zen
+    # starts with, and userChrome.css imports it (setup-zen.sh)
+    if grep -q '^\[templates\.zen\]' "$MATUGEN_CFG"; then
+        LUCID_ZEN_OUT="${ZEN_PROFILE:+$ZEN_PROFILE/chrome/lucid-zen.css}" awk '
+            function flush() {
+                if (inblk && lucid) {
+                    if (ENVIRON["LUCID_ZEN_OUT"] != "")
+                        sub(/\noutput_path *= *[^\n]*/, "\noutput_path = \047" ENVIRON["LUCID_ZEN_OUT"] "\047", blk)
+                    else
+                        sub(/\/chrome\/userChrome\.css/, "/chrome/lucid-zen.css", blk)
+                }
+                printf "%s", blk; blk = ""; inblk = 0; lucid = 0
+            }
+            /^\[/ { flush(); if ($0 ~ /^\[templates\.zen\]/) inblk = 1 }
+            { blk = blk $0 "\n"; if (inblk && $0 ~ /zen-userchrome\.css/) lucid = 1 }
+            END { flush() }
+        ' "$MATUGEN_CFG" > "$MATUGEN_CFG.lucid-tmp" && cat "$MATUGEN_CFG.lucid-tmp" > "$MATUGEN_CFG"
+        rm -f "$MATUGEN_CFG.lucid-tmp"
+    fi
+
+    # a block is only added when the app it themes is actually present, so
+    # matugen never writes colours into a config directory that isn't there.
+    # an existing block is always left alone - this config is the user's.
+    add_template() {
+        local name=$1 input=$2 output=$3 guard=${4:-always} hook=${5:-}
+        case "$guard" in
+            always) ;;
+            dir:*)  [[ -d "${guard#dir:}" ]] || { MG_SKIPPED+=("$name"); return 0; } ;;
+            file:*) [[ -f "${guard#file:}" ]] || { MG_SKIPPED+=("$name"); return 0; } ;;
+            cmd:*)  command -v "${guard#cmd:}" &>/dev/null || { MG_SKIPPED+=("$name"); return 0; } ;;
+        esac
+        if grep -q "^\[templates\.$name\]" "$MATUGEN_CFG"; then
+            MG_KEPT+=("$name"); return 0
+        fi
+        mkdir -p "$(dirname "${output/#\~/$HOME}")"
+        {
+            printf '\n[templates.%s]\n' "$name"
+            printf "input_path = '%s'\n" "$input"
+            printf "output_path = '%s'\n" "$output"
+            [[ -n "$hook" ]] && printf "post_hook = '%s'\n" "$hook" || true
+        } >> "$MATUGEN_CFG"
+        MG_ADDED+=("$name")
+    }
+
+    add_template quickshell     "$TPL/quickshell-colors.json"  '~/.cache/quickshell/matugen.json'
+    add_template vscode-raw     "$TPL/vscode-colors"           '~/.cache/matugen/vscode-colors'
+    add_template vscode-json    "$TPL/vscode-colors.json"      '~/.cache/matugen/vscode-colors.json'
+    add_template hyprland       "$TPL/hyprland-colors.lua"     '~/.config/hypr/colors.conf'    "dir:$HOME/.config/hypr"
+    add_template kitty          "$TPL/kitty.conf"              '~/.config/kitty/matugen-colors.conf' "cmd:kitty" 'killall -SIGUSR1 kitty 2>/dev/null || true'
+    # no dir: guard on these two. gtk only creates ~/.config/gtk-{3,4}.0 once
+    # an app writes a setting there, so on a fresh machine the guard skipped
+    # both templates, matugen never wrote colors.css, and nautilus kept its
+    # stock colours forever. add_template creates the directory itself.
+    add_template gtk3           "$TPL/gtk-colors.css"          '~/.config/gtk-3.0/colors.css'
+    add_template gtk4           "$TPL/gtk-colors.css"          '~/.config/gtk-4.0/colors.css'
+    add_template rofi           "$TPL/rofi-colors.rasi"        '~/.config/rofi/colors.rasi'    "dir:$HOME/.config/rofi"
+    add_template waybar         "$TPL/colors.css"              '~/.config/waybar/colors.css'   "dir:$HOME/.config/waybar"
+    add_template swaync         "$TPL/colors.css"              '~/.config/swaync/colors.css'   "dir:$HOME/.config/swaync"
+    add_template wlogout        "$TPL/colors.css"              '~/.config/wlogout/colors.css'  "dir:$HOME/.config/wlogout"
+    add_template ags            "$TPL/ags-colors.scss"         '~/.config/ags/style/_colors.scss' "dir:$HOME/.config/ags"
+    add_template vesktop        "$TPL/midnight-discord.css"    '~/.config/vesktop/themes/midnight-discord.css' "dir:$HOME/.config/vesktop"
+    add_template pywalfox       "$TPL/pywalfox-colors.json"    '~/.cache/wal/colors.json'      "cmd:pywalfox" 'pywalfox update'
+    add_template steam-material "$TPL/steam-material.css"      '~/.local/share/Steam/millennium/themes/Material-Theme/css/main/colors/matugen.css' \
+                                "dir:$HOME/.local/share/Steam/millennium/themes/Material-Theme"
+    # Qt widget apps take their palette from qt6ct, the platform theme
+    # modules/env.lua sets. KDE apps then lay a KDE colour scheme over it, so
+    # they get one too - both are pointed at below. qt6ct watches its own
+    # folder but not colors/, so the hook touches qt6ct.conf for open apps
+    add_template qt6ct          "$TPL/qt6ct-colors.conf"       '~/.config/qt6ct/colors/lucid.conf' "cmd:qt6ct" \
+                                'touch -c ~/.config/qt6ct/qt6ct.conf'
+    add_template kde            "$TPL/kde-colors.colors"       '~/.local/share/color-schemes/Lucid.colors' "cmd:qt6ct"
+
+    if [[ -n "$FF_PROFILE" ]]; then
+        add_template firefox-website-colors "$TPL/firefox-colors.css" "$FF_PROFILE/chrome/colors.css"
+    else
+        MG_SKIPPED+=(firefox-website-colors)
+    fi
+    if [[ -n "$ZEN_PROFILE" ]]; then
+        add_template zen "$TPL/zen-userchrome.css" "$ZEN_PROFILE/chrome/lucid-zen.css"
+        add_template zen-sites "$TPL/zen-sites.css" "$ZEN_PROFILE/chrome/lucid-sites.css"
+        "$LUCID_DIR/setup-zen.sh" install || warn "could not point zen's userChrome.css at Lucid's colours"
+        # colours that change while zen runs need fx-autoconfig's loader in
+        # zen's own folder. it runs whatever lands in the profile's chrome/JS
+        # with the browser's rights, so it is asked for
+        "$LUCID_DIR/setup-zen.sh" program --check && ZEN_LOADER=0 || ZEN_LOADER=$?
+        if (( ZEN_LOADER == 1 )) \
+            && ask "  Let Zen change colours while it runs? (puts fx-autoconfig's loader in Zen's folder, needs sudo)"; then
+            "$LUCID_DIR/setup-zen.sh" program || warn "could not add zen's loader; its colours change when it restarts"
+        fi
+    else
+        MG_SKIPPED+=(zen)
+    fi
+
+    (( ${#MG_ADDED[@]} ))   && say "  matugen added:   ${MG_ADDED[*]}"                                || true
+    (( ${#MG_KEPT[@]} ))    && say "  ${dim}matugen kept:    ${MG_KEPT[*]}${r}"                       || true
+    (( ${#MG_SKIPPED[@]} )) && say "  ${dim}matugen skipped: ${MG_SKIPPED[*]} (not installed)${r}"    || true
+
+    # put keys under [section] of an ini file, creating the section - or the
+    # file - when it isn't there
+    ini_add_keys() {
+        local file=$1 section=$2 keys=$3
+        mkdir -p "$(dirname "$file")"
+        if [[ ! -f "$file" ]]; then
+            printf '[%s]\n%s\n' "$section" "$keys" > "$file"
+        elif grep -qxF "[$section]" "$file"; then
+            awk -v s="[$section]" -v k="$keys" '{ print } $0 == s { print k }' "$file" > "$file.lucid-tmp" \
+                && cat "$file.lucid-tmp" > "$file"
+            rm -f "$file.lucid-tmp"
+        else
+            printf '\n[%s]\n%s\n' "$section" "$keys" >> "$file"
+        fi
+    }
+
+    # with no palette chosen in qt6ct, Qt apps (Prism Launcher, qt6ct itself...)
+    # get Qt's stock light one whatever the theme. a palette already picked
+    # there is the user's and stays
+    QT6CT_CFG="$HOME/.config/qt6ct/qt6ct.conf"
+    if command -v qt6ct &>/dev/null && grep -q '^\[templates\.qt6ct\]' "$MATUGEN_CFG"; then
+        if grep -qE '^(custom_palette|color_scheme_path)=' "$QT6CT_CFG" 2>/dev/null; then
+            say "  ${dim}qt6ct already has a palette${r}"
+        else
+            ini_add_keys "$QT6CT_CFG" Appearance \
+                "color_scheme_path=$HOME/.config/qt6ct/colors/lucid.conf"$'\n'"custom_palette=true"
+            say "  qt6ct now uses the theme's palette"
+        fi
+    fi
+
+    # outside Plasma, a KDE app (Dolphin, Kate, Okular...) with no colour scheme
+    # named in kdeglobals swaps the qt6ct palette for Breeze Light or Dark as it
+    # starts, so name Lucid's. one already named - by Plasma under [General] or
+    # by the user - stays
+    KDEGLOBALS="$HOME/.config/kdeglobals"
+    if command -v qt6ct &>/dev/null && grep -q '^\[templates\.kde\]' "$MATUGEN_CFG"; then
+        if grep -q '^ColorScheme=' "$KDEGLOBALS" 2>/dev/null; then
+            say "  ${dim}kdeglobals already names a colour scheme${r}"
+        else
+            ini_add_keys "$KDEGLOBALS" UiSettings "ColorScheme=Lucid"
+            say "  KDE apps now use the theme's colour scheme"
+        fi
+    fi
+
+    # GTK apps - Nautilus included - only read colors.css if gtk.css imports it
+    for gtkver in 3.0 4.0; do
+        gtkdir="$HOME/.config/gtk-$gtkver"
+        mkdir -p "$gtkdir"
+        if [[ -f "$gtkdir/gtk.css" ]] && grep -q "colors.css" "$gtkdir/gtk.css"; then
+            say "  ${dim}gtk-$gtkver already imports colors.css${r}"
+        else
+            [[ -f "$gtkdir/gtk.css" ]] && cp "$gtkdir/gtk.css" "$gtkdir/gtk.css.backup-$STAMP"
+            printf "@import url('colors.css');\n" >> "$gtkdir/gtk.css"
+            say "  gtk-$gtkver now imports colors.css"
+        fi
+    done
+
+    # --- the look: terminal + prompt + blur -------------------------------
+    # each piece is additive and backed up first, because these are files the
+    # user owns and may already have tuned
+    if [[ $WITH_LOOK -eq 1 ]] && ask "  Apply the Lucid look (kitty, starship prompt, fastfetch, VSCode theme, GTK theme + icons)?"; then
+
+        # --- gtk theme + icons --------------------------------------------
+        # gtk reads three places and they disagree happily. under hyprland
+        # there is no xsettings daemon, so gtk3/gtk4 take settings.ini as the
+        # source of truth while gnome apps and portals read gsettings - set
+        # both or half your apps stay light. settings.ini is merged key by
+        # key: it also carries the user's font, cursor and hinting choices.
+        GTK_THEME_NAME=adw-gtk3-dark
+        ICON_THEME_NAME=FairyWren_Dark
+
+        # replace the key if it is there, insert it under [Settings] if not
+        ini_set() {
+            local f=$1 k=$2 v=$3
+            mkdir -p "$(dirname "$f")"
+            if [[ ! -f "$f" ]]; then
+                printf '[Settings]\n%s=%s\n' "$k" "$v" > "$f"
+                return 0
+            fi
+            grep -q '^\[Settings\]' "$f" || printf '\n[Settings]\n' >> "$f"
+            if grep -q "^$k=" "$f"; then
+                sed -i "s|^$k=.*|$k=$v|" "$f"
+            else
+                sed -i "0,/^\[Settings\]/s|^\[Settings\]|[Settings]\n$k=$v|" "$f"
+            fi
+        }
+
+        # FairyWren is not in the repos and the AUR build slices it into 52
+        # per-colour themes with different names, so take it from upstream:
+        # the two directories there are exactly the theme names set below
+        ICONS_DIR="$HOME/.local/share/icons"
+        if [[ -d "$ICONS_DIR/$ICON_THEME_NAME" ]]; then
+            say "  ${dim}keeping the FairyWren icons already in $ICONS_DIR${r}"
+        elif ! command -v git &>/dev/null; then
+            warn "  git is not installed — skipping the FairyWren icon theme"
+            ICON_THEME_NAME=""
+        else
+            say "  fetching the FairyWren icon theme (~140MB, one-time)"
+            FW_TMP=$(mktemp -d)
+            if git clone --depth 1 https://gitlab.com/FreshDoctor/FairyWren-Icons.git \
+                 "$FW_TMP/fw" &>/dev/null \
+               && [[ -d "$FW_TMP/fw/FairyWren_Dark" && -d "$FW_TMP/fw/FairyWren_Light" ]]; then
+                mkdir -p "$ICONS_DIR"
+                cp -r "$FW_TMP/fw/FairyWren_Dark" "$FW_TMP/fw/FairyWren_Light" "$ICONS_DIR/"
+                say "  FairyWren icons -> $ICONS_DIR"
+            else
+                warn "  could not fetch the FairyWren icons — leaving the icon theme alone"
+                ICON_THEME_NAME=""
+            fi
+            rm -rf "$FW_TMP"
+        fi
+
+        # the loader only rescans a theme once its cache is rebuilt
+        if [[ -n "$ICON_THEME_NAME" ]] && command -v gtk-update-icon-cache &>/dev/null; then
+            for v in Dark Light; do
+                [[ -d "$ICONS_DIR/FairyWren_$v" ]] || continue
+                gtk-update-icon-cache -qtf "$ICONS_DIR/FairyWren_$v" &>/dev/null || true
+            done
+        fi
+
+        # adw-gtk3-dark ships inside adw-gtk-theme rather than as its own
+        # package, so check the theme directory, not the package name
+        if [[ ! -d /usr/share/themes/$GTK_THEME_NAME && ! -d "$HOME/.themes/$GTK_THEME_NAME" ]]; then
+            warn "  $GTK_THEME_NAME is not installed — install adw-gtk-theme"
+        fi
+
+        for gtkver in 3.0 4.0; do
+            gtkini="$HOME/.config/gtk-$gtkver/settings.ini"
+            [[ -f "$gtkini" ]] && cp "$gtkini" "$gtkini.backup-$STAMP"
+            ini_set "$gtkini" gtk-theme-name "$GTK_THEME_NAME"
+            ini_set "$gtkini" gtk-application-prefer-dark-theme 1
+            [[ -n "$ICON_THEME_NAME" ]] && ini_set "$gtkini" gtk-icon-theme-name "$ICON_THEME_NAME"
+        done
+        say "  gtk-3.0 and gtk-4.0 settings.ini -> $GTK_THEME_NAME${ICON_THEME_NAME:+ + $ICON_THEME_NAME}"
+
+        # gnome apps, portals and anything reading dconf take these instead
+        if command -v gsettings &>/dev/null; then
+            # a value that is already Lucid's has nothing to go back to
+            for kv in gtk-theme="$GTK_THEME_NAME" color-scheme=prefer-dark icon-theme="$ICON_THEME_NAME"; do
+                [[ -n "${kv#*=}" ]] || continue
+                old=$(gsettings get org.gnome.desktop.interface "${kv%%=*}" 2>/dev/null) || continue
+                [[ "$old" == "'${kv#*=}'" ]] || remember "gsettings.${kv%%=*}" "$old"
+            done
+            gsettings set org.gnome.desktop.interface gtk-theme "$GTK_THEME_NAME" 2>/dev/null || true
+            gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' 2>/dev/null || true
+            [[ -n "$ICON_THEME_NAME" ]] && \
+                gsettings set org.gnome.desktop.interface icon-theme "$ICON_THEME_NAME" 2>/dev/null || true
+            say "  gsettings -> $GTK_THEME_NAME, prefer-dark${ICON_THEME_NAME:+, $ICON_THEME_NAME}"
+        else
+            warn "  gsettings not found — GNOME apps may ignore the theme"
+        fi
+
+        # kitty - the include is what makes matugen's colours apply at all
+        KITTY_CFG="$HOME/.config/kitty/kitty.conf"
+        KITTY_EXISTED=0; [[ -f "$KITTY_CFG" ]] && KITTY_EXISTED=1
+
+        # a kitty.conf an earlier install shipped, with nothing of the user's
+        # in it: every setting is one Lucid wrote, then or now. that copy is
+        # swapped for the current one; any other is theirs and only gets the
+        # includes below
+        kitty_is_lucids() {
+            [[ $(head -n1 "$1") == "# Lucid — kitty" ]] || return 1
+            local ours extra
+            ours=$(grep -vE '^[[:space:]]*(#|$)' "$SRC/support/look/kitty.conf"; printf '%s\n' "background_opacity 0.7")
+            extra=$(grep -vE '^[[:space:]]*(#|$)' "$1" | grep -vxF -e "$ours" || true)
+            [[ -z $extra ]]
+        }
+        if [[ -f "$KITTY_CFG" ]] && ! cmp -s "$KITTY_CFG" "$SRC/support/look/kitty.conf" && kitty_is_lucids "$KITTY_CFG"; then
+            cp "$KITTY_CFG" "$KITTY_CFG.backup-$STAMP"
+            cp "$SRC/support/look/kitty.conf" "$KITTY_CFG"
+            say "  kitty.conf -> the current Lucid one (the old copy: kitty.conf.backup-$STAMP)"
+        fi
+
+        if [[ -f "$HOME/.config/kitty/kitty.conf" ]]; then
+            if grep -q "matugen-colors.conf" "$HOME/.config/kitty/kitty.conf"; then
+                say "  ${dim}kitty.conf already includes matugen-colors.conf${r}"
+            else
+                cp "$HOME/.config/kitty/kitty.conf" "$HOME/.config/kitty/kitty.conf.backup-$STAMP"
+                printf '\n# added by Lucid — colours follow the active theme\ninclude ./matugen-colors.conf\n' \
+                    >> "$HOME/.config/kitty/kitty.conf"
+                say "  kitty.conf now includes matugen-colors.conf"
+            fi
+        else
+            mkdir -p "$HOME/.config/kitty"
+            cp "$SRC/support/look/kitty.conf" "$HOME/.config/kitty/kitty.conf"
+            say "  kitty.conf -> ~/.config/kitty/kitty.conf"
+        fi
+
+        # background_opacity follows the Glass slider, out of a file the shell
+        # rewrites. seed it first: kitty warns about an include it cannot find,
+        # and the shell only writes once the value differs from what is there
+        if [[ ! -f "$HOME/.config/kitty/lucid-glass.conf" ]]; then
+            printf '# generated by lucid settings\ndynamic_background_opacity yes\nbackground_opacity 1.00\n' \
+                > "$HOME/.config/kitty/lucid-glass.conf"
+            say "  lucid-glass.conf -> ~/.config/kitty/lucid-glass.conf"
+        fi
+        if grep -q "lucid-glass.conf" "$KITTY_CFG"; then
+            say "  ${dim}kitty.conf already includes lucid-glass.conf${r}"
+        else
+            [[ $KITTY_EXISTED -eq 1 && ! -f "$KITTY_CFG.backup-$STAMP" ]] \
+                && cp "$KITTY_CFG" "$KITTY_CFG.backup-$STAMP"
+            printf '\n# added by Lucid — opacity follows the Glass slider\ninclude ./lucid-glass.conf\n' \
+                >> "$KITTY_CFG"
+            say "  kitty.conf now follows the Glass slider"
+        fi
+
+        # kitty opens fish rather than the login shell. only wired when fish is
+        # really there: kitty fails to open a window at all on a shell it cannot
+        # exec, and that reads as "the terminal keybind is broken"
+        if command -v fish &>/dev/null; then
+            if grep -qE '^[[:space:]]*shell[[:space:]]+' "$KITTY_CFG"; then
+                say "  ${dim}kitty.conf already sets a shell${r}"
+            else
+                [[ $KITTY_EXISTED -eq 1 && ! -f "$KITTY_CFG.backup-$STAMP" ]] \
+                    && cp "$KITTY_CFG" "$KITTY_CFG.backup-$STAMP"
+                printf '\n# added by Lucid\nshell fish\n' >> "$KITTY_CFG"
+                say "  kitty.conf now opens fish"
+            fi
+        else
+            sed -i '/^# kitty opens fish rather than the login shell$/d; /^shell fish$/d' "$KITTY_CFG"
+            warn "  fish is not installed — kitty will use your login shell"
+        fi
+
+        # vscode / vscodium - matugen writes the colour files, but they do
+        # nothing until the Matugen theme extension is installed and selected
+        vscode_wire() {
+            local cli=$1 cfg=$2
+            command -v "$cli" &>/dev/null || return 0
+            if "$cli" --list-extensions 2>/dev/null | grep -i "matugen-theme" >/dev/null; then
+                say "  ${dim}$cli already has the Matugen theme${r}"
+            elif "$cli" --install-extension haikalllp.matugen-theme &>/dev/null; then
+                say "  installed the Matugen theme extension for $cli"
+            else
+                warn "  could not install the Matugen theme for $cli — do it by hand"
+            fi
+
+            mkdir -p "$(dirname "$cfg")"
+            if [[ ! -f "$cfg" ]]; then
+                printf '{\n  "workbench.colorTheme": "Matugen"\n}\n' > "$cfg"
+                say "  $cli settings.json -> Matugen theme"
+            elif grep -q '"workbench.colorTheme"' "$cfg"; then
+                say "  ${dim}$cli already sets workbench.colorTheme${r}"
+            else
+                cp "$cfg" "$cfg.backup-$STAMP"
+                # settings.json is jsonc - trailing commas are legal there - so
+                # insert as text rather than reparsing and reformatting it
+                awk 'ins != 1 && /\{/ { print; print "  \"workbench.colorTheme\": \"Matugen\","; ins = 1; next } 1' \
+                    "$cfg" > "$cfg.lucid-tmp" && mv "$cfg.lucid-tmp" "$cfg"
+                if grep -q '"workbench.colorTheme"' "$cfg"; then
+                    say "  $cli now uses the Matugen theme"
+                else
+                    cp "$cfg.backup-$STAMP" "$cfg"
+                    warn "  couldn't edit $cli settings.json — set the Matugen theme by hand"
+                fi
+            fi
+        }
+
+        vscode_wire codium   "$HOME/.config/VSCodium/User/settings.json"
+        vscode_wire code     "$HOME/.config/Code/User/settings.json"
+        vscode_wire code-oss "$HOME/.config/Code - OSS/User/settings.json"
+
+        # starship - the prompt shape ships here; sync-starship.sh rewrites
+        # only its [palettes.colors] block on every theme change, so this
+        # file is what makes the prompt look like Lucid's
+        STARSHIP_CFG="$HOME/.config/starship.toml"
+        # the prompt without its colour table, which every theme repaints.
+        # the older ones are the prompts earlier releases shipped
+        starship_shape() { awk '/^\[/ { skip = ($0 == "[palettes.colors]") } !skip' "$1" | md5sum | cut -c1-32; }
+        STARSHIP_OLD_SHAPES="45f0cc0634e505763613a1c4b8bbdbc5 fc6cc84e525ac275570158a41d7dfc66"
+        if [[ ! -f "$STARSHIP_CFG" ]]; then
+            cp "$SRC/support/look/starship.toml" "$STARSHIP_CFG"
+            say "  starship.toml -> ~/.config/starship.toml"
+        elif grep -q '^\[palettes.colors\]' "$STARSHIP_CFG"; then
+            shape=$(starship_shape "$STARSHIP_CFG")
+            if [[ $shape == "$(starship_shape "$SRC/support/look/starship.toml")" ]]; then
+                # its colours are whatever the current theme painted, so
+                # re-copying would only reset them to the seed
+                say "  ${dim}keeping your starship.toml (already the Lucid prompt)${r}"
+            elif [[ " $STARSHIP_OLD_SHAPES " == *" $shape "* ]]; then
+                # an earlier release's prompt, untouched: the new one goes in
+                # and takes the current theme's colours straight away
+                cp "$STARSHIP_CFG" "$STARSHIP_CFG.backup-$STAMP"
+                cp "$SRC/support/look/starship.toml" "$STARSHIP_CFG"
+                [[ -x "$LUCID_DIR/sync-starship.sh" ]] && "$LUCID_DIR/sync-starship.sh" &>/dev/null || true
+                say "  starship.toml -> the new Lucid prompt (the old one: starship.toml.backup-$STAMP)"
+            else
+                # a Lucid prompt someone has made their own
+                say "  ${dim}keeping your starship.toml; the new Lucid prompt is support/look/starship.toml${r}"
+            fi
+        else
+            cp "$STARSHIP_CFG" "$STARSHIP_CFG.backup-$STAMP"
+            cp "$SRC/support/look/starship.toml" "$STARSHIP_CFG"
+            say "  your starship.toml -> starship.toml.backup-$STAMP"
+            say "  starship.toml -> ~/.config/starship.toml"
+        fi
+        command -v starship &>/dev/null \
+            || warn "  starship is not installed — the prompt config is in place but unused"
+
+        # the config does nothing until the shell actually calls starship, and
+        # the init line differs per shell. only ever appended, never rewritten.
+        # a missing rc is created for your login shell only - writing a .zshrc
+        # for someone who does not use zsh is just litter
+        LOGIN_SH=$(basename "${SHELL:-}")
+        starship_init() {
+            local rc=$1 line=$2 shname=$3 always=${4:-0}
+            if [[ ! -f "$rc" ]]; then
+                [[ "$shname" == "$LOGIN_SH" || $always -eq 1 ]] || return 0
+                mkdir -p "$(dirname "$rc")"
+                printf '# added by Lucid\n%s\n' "$line" > "$rc"
+                say "  created $(basename "$rc") to start starship"
+                return 0
+            fi
+            if grep -F 'starship init' "$rc" >/dev/null; then
+                say "  ${dim}$(basename "$rc") already starts starship${r}"
+            else
+                cp "$rc" "$rc.backup-$STAMP"
+                printf '\n# added by Lucid\n%s\n' "$line" >> "$rc"
+                say "  $(basename "$rc") now starts starship"
+            fi
+        }
+        starship_init "$HOME/.bashrc"                  'eval "$(starship init bash)"'   bash
+        # zsh redraws on SIGWINCH but does not re-run precmd, so the prompt keeps
+        # the old colours until you press enter. reset-prompt re-runs starship.
+        # bash has no equivalent - its prompt updates on the next prompt instead
+        starship_init "$HOME/.zshrc" 'eval "$(starship init zsh)"
+TRAPWINCH() { zle && { zle reset-prompt; zle -R } }'    zsh
+        # always for fish, whatever the login shell is - kitty opens it
+        starship_init "$HOME/.config/fish/config.fish" 'starship init fish | source'    fish 1
+
+        # fish greets every terminal it opens in with a paragraph about itself.
+        # an empty fish_greeting leaves the window to the prompt; a greeting of
+        # your own stays, whether config.fish sets it, a function draws it, or
+        # it is a universal variable (set -U, kept in fish_variables)
+        FISH_CFG="$HOME/.config/fish/config.fish"
+        if [[ -f "$HOME/.config/fish/functions/fish_greeting.fish" ]] \
+           || grep -qE '^SETUVAR fish_greeting:' "$HOME/.config/fish/fish_variables" 2>/dev/null \
+           || grep -qE '^[[:space:]]*(set[[:space:]]+(-{1,2}[[:alpha:]]+[[:space:]]+)*fish_greeting([[:space:]]|$)|function[[:space:]]+fish_greeting)' "$FISH_CFG" 2>/dev/null; then
+            say "  ${dim}fish already has its greeting set${r}"
+        elif [[ -f "$FISH_CFG" ]]; then
+            [[ -f "$FISH_CFG.backup-$STAMP" ]] || cp "$FISH_CFG" "$FISH_CFG.backup-$STAMP"
+            printf '\n# added by Lucid: no greeting when a terminal opens\nset -g fish_greeting\n' >> "$FISH_CFG"
+            say "  fish no longer greets every new terminal"
+        fi
+
+        # the prompt and kitty.conf are drawn with nerd font glyphs; without
+        # the font every segment renders as a replacement box
+        fc-list 2>/dev/null | grep -i 'JetBrainsMono Nerd Font' >/dev/null \
+            || warn "  JetBrainsMono Nerd Font is missing — the prompt will show boxes"
+
+        # fastfetch - its keys, title and logo are ANSI 32 (color2), which
+        # every Lucid theme paints the primary, so it follows the theme. a
+        # config of your own stays as it is
+        FASTFETCH_CFG="$HOME/.config/fastfetch/config.jsonc"
+        if [[ ! -f "$FASTFETCH_CFG" ]]; then
+            mkdir -p "$(dirname "$FASTFETCH_CFG")"
+            cp "$SRC/support/look/fastfetch.jsonc" "$FASTFETCH_CFG"
+            say "  fastfetch config -> ~/.config/fastfetch/config.jsonc"
+        elif cmp -s "$FASTFETCH_CFG" "$SRC/support/look/fastfetch.jsonc"; then
+            say "  ${dim}fastfetch config is already Lucid's${r}"
+        else
+            say "  ${dim}keeping your fastfetch config; Lucid's is support/look/fastfetch.jsonc${r}"
+        fi
+
+        # hyprland blur - skipped when the lua config went in above, since its
+        # decorations module already carries the same blur
+        if [[ $HYPR_LUA_INSTALLED -eq 1 ]]; then
+            say "  ${dim}blur comes from modules/decorations.lua${r}"
+        elif [[ -f "$HYPR_DIR/hyprland.lua" ]]; then
+            add_hypr_module lucid-look "$SRC/support/look/lucid-look.lua"
+            # per-app glass rides along: Settings > Glass writes lucid-glass.lua
+            # and this is the module that reads it
+            add_hypr_module glass "$SRC/support/hypr/modules/glass.lua"
+            # and so do the options Settings > Windows sets, in lucid-settings.lua
+            add_hypr_module settings "$SRC/support/hypr/modules/settings.lua"
+            # and the apps and variables Settings > Startup keeps, in lucid-startup.lua
+            add_hypr_module startup "$SRC/support/hypr/modules/startup.lua"
+        elif [[ -f "$HYPR_DIR/hyprland.conf" ]]; then
+            cp "$SRC/support/look/lucid-look.conf" "$HYPR_DIR/lucid-look.conf"
+            if grep -q "lucid-look.conf" "$HYPR_DIR/hyprland.conf"; then
+                say "  ${dim}hyprland.conf already sources lucid-look.conf${r}"
+            else
+                cp "$HYPR_DIR/hyprland.conf" "$HYPR_DIR/hyprland.conf.backup-$STAMP"
+                printf '\nsource = ~/.config/hypr/lucid-look.conf\n' >> "$HYPR_DIR/hyprland.conf"
+                say "  hyprland.conf now sources lucid-look.conf"
+            fi
+        else
+            mkdir -p "$HYPR_DIR"
+            cp "$SRC/support/look/lucid-look.conf" "$HYPR_DIR/lucid-look.conf"
+            warn "  no hyprland config found — source lucid-look.conf yourself"
+        fi
+    fi
+
+    # first-run palette, so the shell has colours before any wallpaper is set
+    [[ -f "$HOME/.cache/current_theme" ]] || printf 'matugen' > "$HOME/.cache/current_theme"
+    if [[ ! -s "$HOME/.cache/quickshell/matugen.json" ]]; then
+        cp "$SRC/support/lucid/themes/nord/quickshell.json" "$HOME/.cache/quickshell/matugen.json"
+        say "  seeded a starter palette (nord) — pick a theme in Settings to change it"
+    fi
+else
+    step "Skipping the theming layer (--no-theming)"
+    say "  the theme picker and wallpaper strip will not work until it is installed"
+fi
+
+# -------------------------------------------------------------- wallpapers
+
+# one folder per theme, which is where the wallpaper strip looks:
+# ~/Pictures/wallpapers/<theme>. yours are never overwritten or removed
+PICTURES_DIR="$HOME/Pictures/wallpapers"
+if [[ $WITH_WALLPAPERS -eq 1 && -d "$SRC/wallpapers" ]]; then
+    step "Installing the wallpapers"
+
+    WALL_NEW=0
+    WALL_KEPT=0
+    for dir in "$SRC"/wallpapers/*/; do
+        [[ -d "$dir" ]] || continue
+        theme="$(basename "$dir")"
+        mkdir -p "$PICTURES_DIR/$theme"
+        for pic in "$dir"*; do
+            [[ -f "$pic" ]] || continue
+            dest="$PICTURES_DIR/$theme/$(basename "$pic")"
+            if [[ -e "$dest" ]]; then
+                WALL_KEPT=$((WALL_KEPT + 1))
+            else
+                cp "$pic" "$dest"
+                WALL_NEW=$((WALL_NEW + 1))
+            fi
+        done
+    done
+
+    say "  $WALL_NEW wallpapers -> $PICTURES_DIR"
+    [[ $WALL_KEPT -gt 0 ]] && say "  ${dim}$WALL_KEPT were already there, left as they are${r}"
+    say "  ${dim}the strip shows the folder for the theme you are on; SUPER+B opens it${r}"
+elif [[ $WITH_WALLPAPERS -eq 0 ]]; then
+    step "Skipping the wallpapers (--no-wallpapers)"
+    say "  ${dim}$PICTURES_DIR is left alone; the strip shows whatever is in it${r}"
+fi
+
+# ---------------------------------------------------------------------- done
+
+step "Done"
+
+# a running instance is still on the old files, so offer the restart that
+# actually puts the new version on screen.
+# the path alone is not enough: with nothing running, `qs list` says
+# "No running instances for <path>", which the path matches. the field only
+# a real instance has is what to look for.
+# no grep -q here: it would close the pipe, and pipefail would then read the
+# producer's SIGPIPE as "not running". the in-shell updater (LUCID_UPDATER)
+# asks about the restart itself, once the install has finished
+if [[ -z "${LUCID_UPDATER:-}" ]] && qs list 2>/dev/null | grep -F "Config path: $SHELL_DIR/shell.qml" >/dev/null; then
+    if ask "  Lucid is running on the old files. Restart it now?"; then
+        qs kill -p "$SHELL_DIR" 2>/dev/null || true
+        sleep 1
+        # through the launcher, as autostart does, so the new instance gets
+        # the same render backend and driver choice as one started at login
+        if [[ -x "$LUCID_DIR/launch-shell.sh" ]]; then
+            (setsid "$LUCID_DIR/launch-shell.sh" -d >/dev/null 2>&1 &) || true
+        else
+            (setsid qs -d >/dev/null 2>&1 &) || true
+        fi
+        say "  restarted"
+    fi
+fi
+
+cat <<EOF
+
+  ${b}Lucid $VERSION${r} is installed.
+
+  Start it:      ${b}qs${r}
+  Settings:      ${b}qs ipc call -- settings open${r}
+
+EOF
+
+if [[ $HYPR_LUA_INSTALLED -eq 1 ]]; then
+    cat <<EOF
+  Hyprland is configured: modules/binds.lua carries the binds, the window
+  and layer rules are in place, and modules/autostart.lua starts the shell
+  on login.
+
+    SUPER            launcher        SUPER+W      workspaces
+    SUPER+S          settings        SUPER+T      theme picker
+    SUPER+period     emoji           SUPER+B      wallpaper
+    SUPER+P          commands        SUPER+E      files
+    SUPER+C          close window    SUPER+V      float
+    SUPER+D / Print  screenshot      F10          lock
+    SUPER+R          reload hypr     F9           terminal
+    SUPER+Escape     session         CTRL+ALT+TAB switch windows
+
+  Special workspaces slide over whatever you are on; the same keys hide them:
+
+    SUPER+SHIFT+S    scratchpad      SUPER+ALT+S  stash a window
+    SUPER+SHIFT+M    music           SUPER+SHIFT+D  comms
+    SUPER+SHIFT+R    to-do           CTRL+SHIFT+ESC system monitor
+
+  ${b}The new binds are not live yet${r} — run ${b}hyprctl reload${r}, or log out
+  and back in to pick up the autostart too.
+
+EOF
+else
+    cat <<EOF
+  Autostart:     add ${b}exec-once = qs${r} to your Hyprland config
+
+  Suggested Hyprland binds:
+
+    bind = SUPER, SPACE,  exec, qs ipc call -- launcher toggle
+    bind = SUPER, E,      exec, qs ipc call -- moji toggle
+    bind = SUPER, L,      exec, qs ipc call -- lock lock
+    bind = SUPER, S,      exec, qs ipc call -- snap toggle
+    bind = SUPER, comma,  exec, qs ipc call -- settings open
+
+  Keep the double dash: it is required whenever a call takes an argument.
+  Or run ${b}./install.sh --with-hypr${r} to take Lucid's config wholesale.
+
+EOF
+    # the installer window says the same thing on its last page
+    [[ -z "${LUCID_UPDATER:-}" ]] || printf '@@lucid:hypr-kept\n'
+fi
+
+# from another desktop none of the above is live until a login into Hyprland
+if [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+    HERE=${XDG_CURRENT_DESKTOP:-}
+    if [[ -n "$HERE" ]]; then
+        say "  ${b}You are on ${HERE##*:} right now, and Lucid runs on Hyprland.${r}"
+        say "  Log out and choose Hyprland on the login screen."
+    else
+        say "  ${b}Lucid runs on Hyprland.${r} Start it with ${b}start-hyprland${r}, or"
+        say "  choose Hyprland on your login screen."
+    fi
+    [[ $HYPR_LUA_INSTALLED -eq 1 ]] || say "  Add the autostart line above to your config first."
+    [[ -z "$HERE" ]] || say "  ${HERE##*:} stays on that list to go back to."
+    say "  ./uninstall.sh takes Lucid out again."
+    say ""
+fi
+
+if [[ $DEPS_OK -eq 0 ]]; then
+    warn "some dependencies are missing — the shell is installed, but the"
+    warn "features they back will not work until you install them."
+fi

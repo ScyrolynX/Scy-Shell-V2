@@ -1,0 +1,60 @@
+#compdef scy-shell
+# Scy-Shell v2.0 Zsh Completion (First-Class Zsh Support — Zero Fish Dependency)
+
+_scy_shell() {
+  local -a subcommands
+  subcommands=(
+    'status:Show unified Scy-Shell daemon, dock owner, profile, and health state'
+    'studio:Open Unified 15-Section Scy-Shell Studio (optional section 01-personalization..15-advanced)'
+    'dock:Switch or inspect single-owner Dock mode (lucid, mandara, island, notch, split, rail, disabled)'
+    'profile:List, switch, create, or export Scy-Shell profiles (minimal, productivity, immersive, gaming, creative, cinema, balanced, custom)'
+    'layout:Apply or inspect Scy Layout Composer presets (scy-signature, unity-left, minimal-top, bottom-deck, dual-stage)'
+    'component:Inspect or update Scy Component Laboratory styling overrides'
+    'preview:Stage, compare, apply, or revert live Studio setting transactions'
+    'perf:Switch Scy Intelligent Performance tier (max-quality, balanced, performance, battery)'
+    'island:Control Scy Dynamic Island capsule mode'
+    'overview:Toggle Scy Workspace Experience overview'
+    'cc:Toggle Scy Control Center'
+    'lock:Manage Section 11 Session Lock Screen settings independently of Login'
+    'login:Manage Section 12 Pre-Session Login Greeter settings independently of Lock Screen'
+    'get:Read any of the 2,026 unified Scy-Shell settings'
+    'set:Update and atomically persist any unified Scy-Shell setting'
+    'reset:Reset a single setting, one of the 15 Studio sections, or active profile'
+    'backup:Create, list, or restore timestamped configuration snapshots'
+    'hypr:Emit or validate Hyprland 0.57+ modular configuration and keybinds'
+    'conflicts:Scan Wayland/D-Bus/daemon ownership and resync single-owner gates'
+    'doctor:Run CachyOS / Hyprland 0.57+ / Quickshell / Zsh environment diagnostics'
+    'provenance:Verify cryptographic SHA-256 upstream & reversible patch integrity'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe -t commands 'scy-shell command' subcommands
+    return
+  fi
+
+  case "${words[2]}" in
+    studio)
+      _values 'studio section' \
+        '01-personalization' '02-desktop' '03-dock' '04-visual-effects' '05-layout' \
+        '06-widgets' '07-windows' '08-interactions' '09-notifications' '10-system-hardware' \
+        '11-lock-screen' '12-login' '13-productivity' '14-profiles' '15-advanced'
+      ;;
+    dock)
+      _values 'dock action' 'lucid' 'mandara' 'island' 'notch' 'split' 'rail' 'disabled' 'status'
+      ;;
+    profile)
+      _values 'profile' 'balanced' 'minimal' 'productivity' 'immersive' 'gaming' 'creative' 'cinema' 'custom'
+      ;;
+    layout)
+      _values 'layout preset' 'scy-signature' 'unity-left' 'minimal-top' 'bottom-deck' 'dual-stage'
+      ;;
+    perf)
+      _values 'performance tier' 'max-quality' 'balanced' 'performance' 'battery'
+      ;;
+    reset)
+      _values 'reset scope' '--setting' '--section' '--profile'
+      ;;
+  esac
+}
+
+_scy_shell "$@"

@@ -1,0 +1,15 @@
+{
+  "environment": {
+    "measured_in_sandbox": true,
+    "wayland_display_present": false,
+    "honesty_note": "scy-daemon RSS, 1,875-setting sync latency, and C11 Unix-socket IPC round-trip times are real measurements executed in this Linux environment. Live Wayland GPU/VRAM/frame-time metrics require running this identical script inside an active CachyOS Hyprland session."
+  },
+  "measured_metrics": {
+    "catalogue_load_1875_settings_ms": 202.29,
+    "full_dual_engine_sync_flush_ms": 0.45,
+    "scy_daemon_cold_ready_ms": 295.82,
+    "scy_daemon_vmrss_mb": 25.96,
+    "c11_ipc_roundtrip_p50_ms": 1.416,
+    "c11_ipc_roundtrip_p95_ms": 1.747
+  }
+}

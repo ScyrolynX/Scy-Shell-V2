@@ -1,0 +1,1088 @@
+pragma Singleton
+
+import QtQuick
+import Quickshell
+import Quickshell.Io
+import Quickshell.Bluetooth
+import Quickshell.Networking
+import Quickshell.Services.Pam
+import Quickshell.Services.UPower
+import qs
+
+// the lock session's brain: pam, the attempt ledger, the keyboard's locks and
+// the two faces the surface can wear. lucidlock/ only draws what it reads here
+Singleton {
+    id: root
+
+    // ── session ────────────────────────────────────────────────────────────
+    property bool locked: false
+    // the surface is playing its exit and must not accept anything more
+    property bool leaving: false
+    // glance shows the day; focus shows the field. typing crosses over
+    property bool focused: false
+    // settings' preview draws the lock without locking anything. while one is
+    // up, the clock ticks and the glance data is read as if locked
+    property int previews: 0
+    readonly property bool live: root.locked || root.previews > 0
+
+    function holdPreview() {
+        root.previews += 1;
+    }
+
+    function releasePreview() {
+        root.previews = Math.max(0, root.previews - 1);
+    }
+    // ── surfaces ───────────────────────────────────────────────────────────
+    // solid m3 containers, so a busy wallpaper never reads through a card
+    readonly property color card: Theme.surfaceContainer
+    readonly property color cardHigh: Theme.surfaceHighest
+    readonly property color hairline: Theme.alpha(Theme.outline, 0.45)
+
+    // ── who is being asked ─────────────────────────────────────────────────
+    // read lazily: touching Users spawns its probe, and nothing wants that
+    // at shell start — only once a lock is actually up
+    readonly property var account: root.live ? Users.me : null
+    readonly property string userName: root.account ? root.account.name : (Quickshell.env("USER") || "")
+    readonly property string displayName: root.account ? Users.displayName(root.account) : root.userName
+    readonly property string initials: root.account ? Users.initials(root.account) : (root.userName !== "" ? root.userName.substring(0, 2).toUpperCase() : "?")
+    readonly property string avatar: root.account ? Users.avatarUrl(root.account) : ""
+
+    // ── pam ────────────────────────────────────────────────────────────────
+    // /etc/pam.d/login is the one service every distro ships for a local seat
+    property string pamConfig: "login"
+    // idle | prompting | checking | failed | error | granted
+    property string phase: "idle"
+    // pam asks in its own words once it wants anything but the password
+    property string prompt: ""
+    property bool secret: true
+    // pam's own last sentence, which is better copy than anything we invent
+    property string pamText: ""
+    property int attempts: 0
+    property bool fingerOn: false
+    property string fingerText: ""
+    property bool fingerFailed: false
+    // faillock's defaults, replaced by its config when that sets them
+    property int denyAfter: 3
+    property int unlockAfter: 600
+
+    // seconds left on a faillock lockout, counted down locally
+    property int lockoutLeft: 0
+    readonly property bool lockedOut: root.lockoutLeft > 0
+    readonly property int triesLeft: Math.max(0, root.denyAfter - root.attempts)
+    readonly property bool busy: root.phase === "checking"
+    readonly property bool granted: root.phase === "granted"
+    // nothing may be typed while pam owns the turn or the account is barred
+    readonly property bool acceptsInput: !root.busy && !root.granted && !root.leaving && !root.lockedOut
+
+    // ── keyboard ───────────────────────────────────────────────────────────
+    property bool capsLock: false
+    property string layout: ""
+    // "English (US)" is too much for a 20px chip; keep the short half
+    readonly property string layoutShort: {
+        if (root.layout === "")
+            return "";
+
+        var m = /\(([^)]+)\)/.exec(root.layout);
+        var t = m ? m[1] : root.layout.split(/[\s,]+/)[0];
+        return t.substring(0, 6).toUpperCase();
+    }
+
+    // ── the one line under the field ───────────────────────────────────────
+    // kind drives its colour: error | good | info | none
+    readonly property string statusKind: {
+        if (root.granted)
+            return "good";
+
+        if (root.lockedOut || root.phase === "failed" || root.phase === "error")
+            return "error";
+
+        if (root.phase === "checking" || root.phase === "prompting")
+            return "info";
+
+        if (root.fingerOn)
+            return root.fingerFailed ? "error" : "info";
+
+        return "none";
+    }
+    readonly property string statusText: {
+        if (root.granted)
+            return I18n.tr("Welcome back");
+
+        if (root.lockedOut)
+            return I18n.tr("Too many attempts — try again in %1", root.humanSecs(root.lockoutLeft));
+
+        if (root.phase === "checking")
+            return I18n.tr("Checking…");
+
+        if (root.phase === "error")
+            return root.pamText !== "" ? root.pamText : I18n.tr("Authentication is unavailable right now");
+
+        if (root.phase === "failed") {
+            if (root.pamText !== "")
+                return root.pamText;
+
+            if (root.triesLeft === 1)
+                return I18n.tr("Incorrect password — one try left");
+
+            if (root.triesLeft > 1)
+                return I18n.tr("Incorrect password — %1 tries left", root.triesLeft);
+
+            return I18n.tr("Incorrect password");
+        }
+        if (root.phase === "prompting" && root.prompt !== "")
+            return root.prompt;
+
+        if (root.fingerOn)
+            return root.fingerFailed && root.fingerText !== "" ? root.fingerText : I18n.tr("Touch the fingerprint sensor or type your password");
+
+        return "";
+    }
+
+    function humanSecs(s) {
+        if (s >= 90)
+            return Math.round(s / 60) + " minutes";
+
+        if (s > 45)
+            return I18n.tr("a minute");
+
+        return Math.max(1, s) + " seconds";
+    }
+
+    // ── session control ────────────────────────────────────────────────────
+    // settle: ms for the menu that asked to shut before the desktop is photographed
+    function lock(settle) {
+        if (root.locked || root.arming)
+            return ;
+
+        root.arming = true;
+        root.captures = ({
+        });
+        root.seeThrough = false;
+        settleWait.interval = Math.max(1, settle || 0);
+        settleWait.restart();
+    }
+
+    function lockNow() {
+        root.arming = false;
+        root.reset();
+        root.leaving = false;
+        root.focused = false;
+        root.keysOpen = false;
+        root.lockedAt = Date.now();
+        root.locked = true;
+        Users.probe();
+        root.startFinger();
+    }
+
+    // ── the desktop the lock grows out of ──────────────────────────────────
+    // screencopy only sees the lock once it is up, so the desktop is caught first
+    property bool arming: false
+    // screen name -> file url
+    property var captures: ({
+    })
+    // a surface built long after this (a reload) must not replay the dive
+    property real lockedAt: 0
+    // session_lock_xray is on, so an unlock can end see-through. only after a grant
+    property bool seeThrough: false
+    readonly property string captureDir: Quickshell.env("XDG_RUNTIME_DIR") || "/tmp"
+
+    function captureFor(screen) {
+        return screen ? (root.captures[screen.name] || "") : "";
+    }
+
+    Timer {
+        id: settleWait
+
+        onTriggered: {
+            // switched off in settings: no photograph, the lock simply arrives
+            if (!Prefs.lockDive) {
+                root.armed(true);
+                return ;
+            }
+            var names = [];
+            for (var i = 0; i < Quickshell.screens.length; i++)
+                names.push(Quickshell.screens[i].name);
+
+            capture.stamp = Date.now();
+            capture.command = ["sh", "-c", "umask 077; d=$1; s=$2; shift 2; for o; do (timeout 1 grim -t ppm -o \"$o\" \"$d/lucid-lock-$o-$s.ppm\" 2>/dev/null && echo \"$o\") & done; wait", "sh", root.captureDir, String(capture.stamp)].concat(names);
+            capture.running = true;
+            captureCap.restart();
+        }
+    }
+
+    // a screen that is off never hands over a frame; lock without it
+    Timer {
+        id: captureCap
+
+        interval: 260
+        onTriggered: root.armed(true)
+    }
+
+    Process {
+        id: capture
+
+        property real stamp: 0
+
+        // the grims hold stdout too, so its end is the end of all of them
+        stdout: StdioCollector {
+            id: captured
+
+            onStreamFinished: root.armed(false)
+        }
+
+    }
+
+    function armed(timedOut) {
+        if (!root.arming)
+            return ;
+
+        captureCap.stop();
+        var map = {
+        };
+        if (timedOut) {
+            capture.running = false;
+        } else {
+            var lines = captured.text.split("\n");
+            for (var i = 0; i < lines.length; i++) {
+                var o = lines[i].trim();
+                if (o !== "")
+                    map[o] = "file://" + root.captureDir + "/lucid-lock-" + o + "-" + capture.stamp + ".ppm";
+
+            }
+        }
+        root.captures = map;
+        root.lockNow();
+    }
+
+    function forgetCaptures() {
+        root.captures = ({
+        });
+        Quickshell.execDetached(["sh", "-c", "rm -f \"$1\"/lucid-lock-*.ppm", "sh", root.captureDir]);
+    }
+
+    // the old value is kept inside hyprland; a shell that died mid-unlock restores it at start
+    Process {
+        id: xrayOn
+
+        command: ["hyprctl", "eval", "if LucidLockXray == nil then local ok, v = pcall(hl.get_config, 'misc.session_lock_xray') LucidLockXray = ok and v or false end hl.config({ ['misc.session_lock_xray'] = true })"]
+        onExited: (code) => {
+            root.seeThrough = code === 0 && root.leaving;
+        }
+    }
+
+    function restoreXray() {
+        Quickshell.execDetached(["hyprctl", "eval", "if LucidLockXray ~= nil then hl.config({ ['misc.session_lock_xray'] = LucidLockXray }) LucidLockXray = nil end"]);
+    }
+
+    // after the surface is gone: xray off under a see-through lock is a black frame
+    Timer {
+        id: xrayOff
+
+        interval: 400
+        onTriggered: root.restoreXray()
+    }
+
+    onLeavingChanged: {
+        if (root.leaving && root.locked)
+            xrayOn.running = true;
+
+    }
+
+    // if the surface never reports back — it failed to draw, or the screen it
+    // was on went away — let go anyway rather than stranding the session
+    Timer {
+        id: deadman
+
+        running: root.leaving
+        interval: Math.max(2000, Theme.ms(2000))
+        onTriggered: {
+            if (root.locked)
+                root.release();
+
+        }
+    }
+
+    // the surface calls this once its exit animation has played out
+    // seeThrough stays set until the next lock, or the last clear frame turns black
+    function release() {
+        root.locked = false;
+        root.leaving = false;
+        root.focused = false;
+        root.reset();
+        root.forgetCaptures();
+        xrayOff.restart();
+    }
+
+    // every unlock asked for from outside: the ipc, logind. asking twice, or
+    // asking when nothing is locked, must not strand `leaving` set
+    function requestUnlock() {
+        if (root.arming) {
+            root.arming = false;
+            settleWait.stop();
+            captureCap.stop();
+            capture.running = false;
+            root.forgetCaptures();
+            return ;
+        }
+        if (root.locked && !root.leaving)
+            root.leaving = true;
+
+    }
+
+    function reset() {
+        if (pam.active)
+            pam.abort();
+
+        root.stopFinger();
+        root.phase = "idle";
+        root.prompt = "";
+        root.secret = true;
+        root.pamText = "";
+        root.attempts = 0;
+        root.pending = "";
+        root.lockoutLeft = 0;
+    }
+
+    // typing or clicking anywhere crosses from glance into the field
+    function engage() {
+        if (!root.focused)
+            root.focused = true;
+
+        idleBack.restart();
+    }
+
+    // the shell's floating keyboard, drawn on the lock (lucidlock/parts/
+    // OnScreenKeys.qml): opened by its chip or a finger on the field, gone
+    // again with the focus. it opens at the size and tab the desktop's has
+    property bool keysOpen: false
+    property real keysSize: 0
+    property string keysLayer: "letters"
+
+    onFocusedChanged: {
+        if (!root.focused)
+            root.keysOpen = false;
+
+    }
+
+    function openKeys() {
+        if (!root.keysOpen) {
+            keysState.reload();
+            try {
+                var s = JSON.parse(keysState.text());
+                root.keysSize = Number(s.keySize) || 0;
+                root.keysLayer = s.keyLayer === "function" ? "function" : "letters";
+            } catch (e) {
+            }
+        }
+        root.keysOpen = true;
+        root.engage();
+    }
+
+    // read only: the lock never moves or resizes the desktop's keyboard
+    FileView {
+        id: keysState
+
+        path: Qt.resolvedUrl("lucidkeys/state.json")
+        blockLoading: true
+        printErrors: false
+    }
+
+    function toggleKeys() {
+        if (root.keysOpen)
+            root.keysOpen = false;
+        else
+            root.openKeys();
+    }
+
+    function disengage() {
+        root.focused = false;
+        idleBack.stop();
+        if (root.phase === "failed" || root.phase === "error")
+            root.phase = "idle";
+
+    }
+
+    // ── authentication ─────────────────────────────────────────────────────
+    property string pending: ""
+
+    function submit(text) {
+        if (!root.acceptsInput || text.length === 0)
+            return ;
+
+        root.pamText = "";
+        root.phase = "checking";
+        root.pending = text;
+        if (pam.active) {
+            // pam is mid-conversation and was waiting on us
+            root.pending = "";
+            pam.respond(text);
+            return ;
+        }
+        if (!pam.start()) {
+            root.pending = "";
+            root.phase = "error";
+            root.pamText = "Cannot reach PAM (/etc/pam.d/" + root.pamConfig + ")";
+        } else {
+            authTimeout.restart();
+        }
+    }
+
+    function fail(text) {
+        authTimeout.stop();
+        root.attempts += 1;
+        root.pamText = text || "";
+        root.phase = "failed";
+        root.focused = true;
+        failed();
+        faillockProc.running = true;
+    }
+
+    function grant() {
+        authTimeout.stop();
+        root.stopFinger();
+        if (pam.active)
+            pam.abort();
+
+        root.pending = "";
+        root.phase = "granted";
+        root.attempts = 0;
+        // let the lock be seen opening; the surface leaves a beat later
+        graceOut.restart();
+    }
+
+    Timer {
+        id: graceOut
+
+        interval: 520
+        onTriggered: root.leaving = true
+    }
+
+    signal failed()
+
+    PamContext {
+        id: pam
+
+        config: root.pamConfig
+        onPamMessage: {
+            if (pam.responseRequired) {
+                if (root.pending !== "") {
+                    var p = root.pending;
+                    root.pending = "";
+                    root.phase = "checking";
+                    pam.respond(p);
+                } else {
+                    // a second question: pam wants something we were not holding
+                    authTimeout.stop();
+                    root.prompt = pam.message.replace(/:\s*$/, "");
+                    root.secret = !pam.responseVisible;
+                    root.phase = "prompting";
+                    root.focused = true;
+                }
+            } else if (pam.message !== "") {
+                // an aside, not a question — usually the faillock warning
+                root.pamText = pam.message;
+            }
+        }
+        onCompleted: (result) => {
+            root.pending = "";
+            if (result === PamResult.Success)
+                root.grant();
+            else if (result === PamResult.MaxTries)
+                root.fail(I18n.tr("Too many attempts — the account is locked"));
+            else if (result === PamResult.Error)
+                root.error(I18n.tr("PAM could not complete the check"));
+            else
+                root.fail(root.pamText);
+        }
+        onError: (e) => root.error(PamError.toString(e) === "StartFailed" ? I18n.tr("PAM refused to start a session") : I18n.tr("PAM failed: %1", PamError.toString(e)))
+    }
+
+    function error(text) {
+        authTimeout.stop();
+        root.pamText = text;
+        root.phase = "error";
+        root.focused = true;
+        failed();
+    }
+
+    // ── fingerprint ────────────────────────────────────────────────────────
+    // pam_fprintd fails without a word when the reader is busy (a resume,
+    // another prompt holding it) or missing, so those retries back off
+    property bool fingerHeard: false
+    property int fingerQuiet: 0
+
+    function startFinger() {
+        if (!root.locked || root.leaving || root.granted || fprint.active)
+            return ;
+
+        root.fingerHeard = false;
+        root.fingerOn = fprint.start();
+        if (!root.fingerOn)
+            root.retryFinger();
+
+    }
+
+    function stopFinger() {
+        fingerRetry.stop();
+        root.fingerQuiet = 0;
+        root.fingerOn = false;
+        root.fingerText = "";
+        root.fingerFailed = false;
+        if (fprint.active)
+            fprint.abort();
+
+    }
+
+    PamContext {
+        id: fprint
+
+        configDirectory: Quickshell.shellPath("pam")
+        config: "fingerprint"
+        onPamMessage: {
+            if (fprint.message === "")
+                return ;
+
+            root.fingerHeard = true;
+            root.fingerText = fprint.message;
+            root.fingerFailed = fprint.messageIsError;
+        }
+        onCompleted: (result) => {
+            if (result === PamResult.Success) {
+                root.grant();
+                return ;
+            }
+            root.retryFinger();
+        }
+        onError: root.retryFinger()
+    }
+
+    function retryFinger() {
+        root.fingerQuiet = root.fingerHeard ? 0 : root.fingerQuiet + 1;
+        if (root.fingerQuiet > 0)
+            root.fingerOn = false;
+
+        fingerRetry.interval = Math.min(60000, 2000 * Math.pow(2, root.fingerQuiet));
+        fingerRetry.restart();
+    }
+
+    Timer {
+        id: fingerRetry
+
+        onTriggered: {
+            root.fingerFailed = false;
+            root.fingerText = "";
+            root.startFinger();
+        }
+    }
+
+    // pam should never take this long; if it does, say so instead of spinning
+    Timer {
+        id: authTimeout
+
+        interval: 20000
+        onTriggered: {
+            pam.abort();
+            root.error(I18n.tr("The check timed out"));
+        }
+    }
+
+    // focus falls back to the glance face when the keyboard goes quiet
+    Timer {
+        id: idleBack
+
+        // 0 in settings keeps the field up until it is dismissed
+        interval: Math.max(1, Prefs.lockIdleBack) * 1000
+        onTriggered: {
+            if (Prefs.lockIdleBack <= 0)
+                return ;
+
+            if (root.locked && !root.busy && root.phase !== "prompting")
+                root.focused = false;
+
+        }
+    }
+
+    // ── faillock ───────────────────────────────────────────────────────────
+    FileView {
+        path: "/etc/security/faillock.conf"
+        onLoaded: {
+            var deny = /^\s*deny\s*=\s*(\d+)/m.exec(this.text());
+            var unlock = /^\s*unlock_time\s*=\s*(\d+)/m.exec(this.text());
+            if (deny)
+                root.denyAfter = parseInt(deny[1]);
+
+            if (unlock)
+                root.unlockAfter = parseInt(unlock[1]);
+
+        }
+    }
+
+    // pam only says "account locked"; faillock knows for how much longer
+    Process {
+        id: faillockProc
+
+        running: false
+        command: ["faillock", "--user", root.userName]
+
+        stdout: StdioCollector {
+            onStreamFinished: {
+                var latest = 0;
+                var valid = 0;
+                var lines = this.text.split("\n");
+                for (var i = 0; i < lines.length; i++) {
+                    var m = /^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\s+\S+.*\s(V|I)\s*$/.exec(lines[i].trim());
+                    if (!m || m[2] !== "V")
+                        continue;
+
+                    valid += 1;
+                    var t = Date.parse(m[1].replace(" ", "T"));
+                    if (!isNaN(t) && t > latest)
+                        latest = t;
+
+                }
+                root.attempts = Math.max(root.attempts, valid);
+                if (valid >= root.denyAfter && latest > 0) {
+                    var left = Math.round((latest + root.unlockAfter * 1000 - Date.now()) / 1000);
+                    root.lockoutLeft = Math.max(0, left);
+                }
+            }
+        }
+    }
+
+    Timer {
+        running: root.lockoutLeft > 0
+        interval: 1000
+        repeat: true
+        onTriggered: {
+            root.lockoutLeft -= 1;
+            if (root.lockoutLeft <= 0)
+                root.phase = "idle";
+
+        }
+    }
+
+    // ── keyboard locks ─────────────────────────────────────────────────────
+    // hyprland has no event for the lock keys, so the field polls while it is
+    // the thing being used
+    Timer {
+        running: root.locked && root.focused
+        interval: 400
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: kbProc.running = true
+    }
+
+    // the layout shows in the status widget at rest too, so read it once on arrival
+    onLiveChanged: {
+        if (root.live)
+            kbProc.running = true;
+
+    }
+
+    Process {
+        id: kbProc
+
+        running: false
+        command: ["hyprctl", "devices", "-j"]
+
+        stdout: StdioCollector {
+            onStreamFinished: {
+                try {
+                    var kbs = JSON.parse(this.text).keyboards || [];
+                    var main = null;
+                    for (var i = 0; i < kbs.length; i++) {
+                        if (kbs[i].main) {
+                            main = kbs[i];
+                            break;
+                        }
+                    }
+                    if (!main && kbs.length > 0)
+                        main = kbs[0];
+
+                    if (!main)
+                        return ;
+
+                    root.capsLock = !!main.capsLock;
+                    root.layout = main.active_keymap || "";
+                } catch (e) {
+                }
+            }
+        }
+    }
+
+    // ── glance ─────────────────────────────────────────────────────────────
+    // read straight off the platform services rather than the shell's settings
+    // singletons: the lock must not drag nmcli/rfkill probes into shell startup
+    readonly property var battery: UPower.displayDevice
+    readonly property bool hasBattery: root.battery ? root.battery.isPresent : false
+    readonly property int batteryPercent: root.hasBattery ? Math.round(root.battery.percentage * 100) : 0
+    readonly property bool charging: root.hasBattery && (root.battery.state === UPowerDeviceState.Charging || root.battery.state === UPowerDeviceState.FullyCharged)
+    readonly property bool batteryLow: root.hasBattery && !root.charging && root.batteryPercent <= 15
+
+    readonly property var wifiDevice: {
+        for (const d of Networking.devices.values) {
+            if (d.type === DeviceType.Wifi)
+                return d;
+
+        }
+        return null;
+    }
+    readonly property var wiredDevice: {
+        for (const d of Networking.devices.values) {
+            if (d.type === DeviceType.Wired)
+                return d;
+
+        }
+        return null;
+    }
+    readonly property bool ethernet: !!(root.wiredDevice && root.wiredDevice.connected)
+    readonly property bool wifiUp: root.wifiDevice ? root.wifiDevice.connected : false
+    property var activeNetwork: null
+    // signalStrength is 0-1 on this backend, not a percentage
+    readonly property int wifiPercent: {
+        if (!root.activeNetwork || root.activeNetwork.signalStrength === undefined)
+            return 0;
+
+        const raw = root.activeNetwork.signalStrength;
+        return Math.round(raw <= 1 ? raw * 100 : raw);
+    }
+    readonly property string netGlyph: root.ethernet ? "ethernet" : (root.wifiUp ? "wifi" : "wifiOff")
+    readonly property string netLabel: {
+        if (root.ethernet)
+            return I18n.tr("Ethernet");
+
+        if (root.wifiUp && root.activeNetwork)
+            return root.activeNetwork.name;
+
+        if (root.wifiUp)
+            return "Wi-Fi";
+
+        return I18n.tr("Offline");
+    }
+
+    function refreshNetwork() {
+        if (!root.wifiDevice) {
+            root.activeNetwork = null;
+            return ;
+        }
+        var found = null;
+        for (const net of root.wifiDevice.networks.values) {
+            if (net.connected) {
+                found = net;
+                break;
+            }
+        }
+        root.activeNetwork = found;
+    }
+
+    Timer {
+        running: root.live
+        interval: 5000
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: root.refreshNetwork()
+    }
+
+    readonly property var btAdapter: Bluetooth.defaultAdapter
+    readonly property bool btOn: root.btAdapter ? root.btAdapter.enabled : false
+    readonly property var btDevices: (root.btAdapter && root.btAdapter.devices) ? root.btAdapter.devices.values.filter((d) => {
+        return d.connected;
+    }) : []
+    readonly property string btLabel: {
+        if (!root.btAdapter)
+            return I18n.tr("No adapter");
+
+        if (!root.btOn)
+            return I18n.tr("Bluetooth off");
+
+        if (root.btDevices.length === 1)
+            return root.btDevices[0].name;
+
+        if (root.btDevices.length > 1)
+            return I18n.tr("%1 devices", root.btDevices.length);
+
+        return I18n.tr("Bluetooth on");
+    }
+
+    // ── the day ────────────────────────────────────────────────────────────
+    // one tick a second so the clock and the greeting stay honest
+    property int tick: 0
+
+    Timer {
+        running: root.live
+        interval: 1000
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: root.tick += 1
+    }
+
+    readonly property var now: {
+        void root.tick;
+        return Loc.now();
+    }
+    readonly property string timeText: {
+        var d = root.now;
+        var h = d.getHours();
+        var hh = Prefs.clock24h ? h : (h % 12 === 0 ? 12 : h % 12);
+        return (Prefs.clock24h && hh < 10 ? "0" : "") + hh + ":" + (d.getMinutes() < 10 ? "0" : "") + d.getMinutes();
+    }
+    readonly property string hourText: root.timeText.split(":")[0]
+    readonly property string minuteText: root.timeText.split(":")[1]
+    readonly property string meridiem: Prefs.clock24h ? "" : (root.now.getHours() < 12 ? "AM" : "PM")
+    readonly property string dateText: root.now.toLocaleDateString(I18n.locale, "dddd, d MMMM")
+    readonly property string greeting: {
+        var h = root.now.getHours();
+        if (h < 5)
+            return I18n.tr("Still up?");
+
+        if (h < 12)
+            return I18n.tr("Good morning");
+
+        if (h < 18)
+            return I18n.tr("Good afternoon");
+
+        if (h < 22)
+            return I18n.tr("Good evening");
+
+        return I18n.tr("Good night");
+    }
+
+    // ── what the shared parts read (lucidlock/parts) ──────────────────────
+    // the login screen's Lock offers the same names, filled its own way
+    readonly property string lockedWord: I18n.tr("Locked")
+    // the lock's parts are drawn by the login screen too, which has no
+    // catalogues: they ask the lock they are handed for their words
+    readonly property var locale: I18n.locale
+
+    function tr(text, ...args) {
+        return I18n.tr(text, ...args); // i18n-dynamic
+    }
+
+    readonly property var weather: {
+        var r = WeatherSource.report;
+        if (!r)
+            return ({
+                "ok": false
+            });
+
+        var today = r.days && r.days.length > 0 ? r.days[0] : null;
+        return {
+            "ok": true,
+            "kind": WeatherSource.kindFor(r.code, r.isDay === false),
+            "temp": Units.deg(r.tempC, r.tempF),
+            "desc": WeatherSource.descFor(r.code),
+            "hi": today ? Units.deg(today.maxC, today.maxF) : "",
+            "lo": today ? Units.deg(today.minC, today.minF) : "",
+            "feels": Units.deg(r.feelsC, r.feelsF),
+            "at": ""
+        };
+    }
+    // the battery symbol that matches the level, in eighths like the bar's
+    readonly property string batteryGlyph: {
+        if (root.charging)
+            return "battery_charging_full";
+
+        const steps = ["battery_0_bar", "battery_1_bar", "battery_2_bar", "battery_3_bar", "battery_4_bar", "battery_5_bar", "battery_6_bar", "battery_full"];
+        return steps[Math.max(0, Math.min(7, Math.floor(root.batteryPercent / 100 * 8)))];
+    }
+    // {key, glyph, label, short, tone, interactive}; tone is a role the part resolves
+    readonly property var statusItems: {
+        var out = [];
+        if (root.hasBattery)
+            out.push({
+                "key": "battery",
+                "glyph": root.batteryGlyph,
+                "label": root.batteryPercent + "%",
+                "short": root.batteryPercent + "%",
+                "tone": root.batteryLow ? "error" : (root.charging ? "success" : "normal")
+            });
+
+        out.push({
+            "key": "network",
+            "glyph": root.netGlyph,
+            "label": root.netLabel,
+            "tone": (root.ethernet || root.wifiUp) ? "accent" : "dim"
+        });
+        if (root.btAdapter)
+            out.push({
+                "key": "bluetooth",
+                "glyph": root.btOn ? "bluetooth" : "bluetoothOff",
+                "label": root.btLabel,
+                "tone": root.btDevices.length > 0 ? "accent" : "dim"
+            });
+
+        if (Notifs.dnd)
+            out.push({
+                "key": "dnd",
+                "glyph": "bellOff",
+                "label": I18n.tr("Do not disturb"),
+                "tone": "warning"
+            });
+
+        if (root.layoutShort !== "")
+            out.push({
+                "key": "keyboard",
+                "glyph": "keyboard",
+                "label": root.layoutShort,
+                "short": root.layoutShort,
+                "tone": "dim"
+            });
+
+        return out;
+    }
+
+    // nothing on the lock's status is a button
+    function activateStatus(key) {
+    }
+
+    // ── wallpaper ──────────────────────────────────────────────────────────
+    readonly property string wallpaper: {
+        var p = wallpaperFile.text().trim();
+        return p.length > 0 ? p : (Quickshell.env("HOME") + "/.config/quickshell/assets/fallback.jpg");
+    }
+
+    FileView {
+        id: wallpaperFile
+
+        path: Quickshell.env("HOME") + "/.cache/current_wallpaper"
+        watchChanges: true
+        onFileChanged: reload()
+    }
+
+    // ── power ──────────────────────────────────────────────────────────────
+    // the same five the dock offers, with the same commands behind them
+    readonly property var powerActions: [
+        {
+            "id": "suspend",
+            "label": I18n.tr("Suspend"),
+            "glyph": "suspend",
+            "confirm": false
+        },
+        {
+            "id": "hibernate",
+            "label": I18n.tr("Hibernate"),
+            "glyph": "hibernate",
+            "confirm": false
+        },
+        {
+            "id": "logout",
+            "label": I18n.tr("Log out"),
+            "glyph": "logout",
+            "confirm": true
+        },
+        {
+            "id": "reboot",
+            "label": I18n.tr("Restart"),
+            "glyph": "restart",
+            "confirm": true
+        },
+        {
+            "id": "shutdown",
+            "label": I18n.tr("Shut down"),
+            "glyph": "power",
+            "confirm": true
+        }
+    ]
+
+    function runPower(id) {
+        var cmds = {
+            // uwsm only stops a session it started, so fall back to hyprland; a lua
+            // config reads a dispatch as lua, where a bare "exit" is no dispatcher
+            "logout": ["sh", "-c", "uwsm stop 2>/dev/null || hyprctl dispatch 'hl.dsp.exit()' || hyprctl dispatch exit"],
+            "suspend": ["systemctl", "suspend"],
+            "shutdown": ["systemctl", "poweroff"],
+            "hibernate": ["systemctl", "hibernate"],
+            "reboot": ["systemctl", "reboot"]
+        };
+        var cmd = cmds[id];
+        if (cmd)
+            Quickshell.execDetached(cmd);
+
+    }
+
+    // ── logind ─────────────────────────────────────────────────────────────
+    // `loginctl lock-session` is how anything off-shell asks for a lock, and
+    // logind answers it by emitting Lock on our own session object. hypridle
+    // relays that too, but only while it is running, and Idle can be turned
+    // off entirely — then nothing would be listening
+    //
+    // quickshell has no dbus binding, so gdbus does the listening (glib2 rides
+    // in under qt6-base, so it is always here). the path has to come from
+    // logind: the `auto` alias only resolves for calls, while signals arrive on
+    // the real, escaped one. exit 3 is ours, and means no session to watch
+    Process {
+        id: logindWatch
+
+        running: true
+        command: ["sh", "-c", "id=$(busctl --system get-property org.freedesktop.login1 /org/freedesktop/login1/session/auto org.freedesktop.login1.Session Id 2>/dev/null | sed 's/^s \"//;s/\"$//'); " + "[ -n \"$id\" ] || exit 3; " + "p=$(busctl --system call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager GetSession s \"$id\" 2>/dev/null | sed 's/^o \"//;s/\"$//'); " + "[ -n \"$p\" ] || exit 3; " + "exec gdbus monitor --system --dest org.freedesktop.login1 --object-path \"$p\""]
+        onExited: (code) => {
+            if (code !== 3)
+                logindRetry.restart();
+
+        }
+
+        stdout: SplitParser {
+            // honouring Unlock is no weaker than `qs ipc call lock unlock`,
+            // which any process of this user can already call
+            onRead: (line) => {
+                var m = /\.Session\.(Lock|Unlock)\b/.exec(line);
+                if (!m)
+                    return ;
+
+                if (m[1] === "Lock")
+                    root.lock();
+                else
+                    root.requestUnlock();
+            }
+        }
+
+    }
+
+    // dbus going away takes the watcher with it; go back for it
+    Timer {
+        id: logindRetry
+
+        interval: 10000
+        onTriggered: logindWatch.running = true
+    }
+
+    // LockedHint is what loginctl and anything else reading the session go by,
+    // so it has to follow the surface. pushed at startup as well: a shell that
+    // died while locked would otherwise leave the hint stuck on
+    function pushLockedHint() {
+        Quickshell.execDetached(["busctl", "--system", "call", "org.freedesktop.login1", "/org/freedesktop/login1/session/auto", "org.freedesktop.login1.Session", "SetLockedHint", "b", root.locked ? "true" : "false"]);
+    }
+
+    onLockedChanged: root.pushLockedHint()
+    Component.onCompleted: {
+        root.pushLockedHint();
+        root.restoreXray();
+        root.forgetCaptures();
+    }
+
+    IpcHandler {
+        target: "lock"
+
+        function lock(): void {
+            root.lock();
+        }
+
+        function unlock(): void {
+            root.requestUnlock();
+        }
+
+        function isLocked(): bool {
+            return root.locked;
+        }
+
+        function status(): string {
+            return JSON.stringify({
+                "locked": root.locked,
+                "phase": root.phase,
+                "focused": root.focused,
+                "attempts": root.attempts,
+                "lockoutLeft": root.lockoutLeft
+            });
+        }
+    }
+}

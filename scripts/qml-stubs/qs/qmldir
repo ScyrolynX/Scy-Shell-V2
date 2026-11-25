@@ -1,0 +1,14 @@
+module qs
+singleton Theme 1.0 ThemeStub.qml
+singleton Prefs 1.0 PrefsStub.qml
+singleton I18n 1.0 I18nStub.qml
+singleton ScyBridge 1.0 ScyBridgeStub.qml
+singleton ScyDesignTokens 1.0 ScyDesignTokensStub.qml
+SettingCard 1.0 SettingCardStub.qml
+SettingRow 1.0 SettingRowStub.qml
+M3Switch 1.0 M3SwitchStub.qml
+M3Slider 1.0 M3SliderStub.qml
+M3Segmented 1.0 M3SegmentedStub.qml
+M3Dropdown 1.0 M3DropdownStub.qml
+M3TextField 1.0 M3TextFieldStub.qml
+M3Button 1.0 M3ButtonStub.qml

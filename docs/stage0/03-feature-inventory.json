@@ -1,0 +1,1237 @@
+[
+  {
+    "feature_id": "A-01",
+    "feature_name": "Lumen File Manager & XDG FileChooser Portal",
+    "category": "Standalone Desktop Apps & Portals",
+    "source_project": "Lucid",
+    "source_files": [
+      "lucidlumen/Lumen.qml",
+      "support/lumend.py"
+    ],
+    "user_facing_behavior": "Full M3 Expressive dual-pane/tabbed file manager (grid/list/column views, preview pane, archive extraction, trash, bulk rename, git badges) AND native org.freedesktop.impl.portal.FileChooser open/save file dialog replacement.",
+    "settings_keys": [
+      "scy.providers.lucid.lumen.* (17 keys)"
+    ],
+    "keybindings": [
+      "Super+E (open Lumen)"
+    ],
+    "ipc_dbus_socket": [
+      "qs ipc call lumen ...",
+      "org.freedesktop.impl.portal.FileChooser (lumend.py)"
+    ],
+    "wayland_hyprland_hooks": [
+      "windowrule float/size for portal dialogs"
+    ],
+    "visual_presentation": "Material 3 Expressive window + Glass sidebar + Jelly transitions",
+    "dependencies": [
+      "quickshell",
+      "python3-dbus-next",
+      "xdg-desktop-portal"
+    ],
+    "conflicts_risks": "Must declare portal priority cleanly in ~/.config/xdg-desktop-portal/hyprland-portals.conf without breaking ScreenCast/Screenshot portals.",
+    "classification": "Class A (Lucid-only)",
+    "scy_shell_target_design": "Preserve 100% intact as Scy-Shell's default File Manager & optional XDG FileChooser portal toggle in Scy-Shell Studio."
+  },
+  {
+    "feature_id": "A-02",
+    "feature_name": "Lens Image Viewer & Quick Editor",
+    "category": "Standalone Desktop Apps",
+    "source_project": "Lucid",
+    "source_files": [
+      "lucidlens/Lens.qml"
+    ],
+    "user_facing_behavior": "Standalone M3 Expressive image viewer with smooth zoom/pan, EXIF metadata inspector, filmstrip, slideshow, crop/rotate/flip, and one-click Set as Wallpaper.",
+    "settings_keys": [
+      "scy.providers.lucid.lens.* (22 keys)"
+    ],
+    "keybindings": [
+      "Launched via MIME association / Lumen"
+    ],
+    "ipc_dbus_socket": [
+      "qs -p lucidlens/Lens.qml"
+    ],
+    "wayland_hyprland_hooks": [
+      "Standard Wayland toplevel + wallpaper IPC trigger"
+    ],
+    "visual_presentation": "Material 3 Expressive chromeless glass viewer",
+    "dependencies": [
+      "quickshell",
+      "qt6-imageformats"
+    ],
+    "conflicts_risks": "None (standalone app).",
+    "classification": "Class A (Lucid-only)",
+    "scy_shell_target_design": "Preserve 100% intact and connect 'Set as Wallpaper' to Scy-Shell's unified Wallpaper Coordinator."
+  },
+  {
+    "feature_id": "A-03",
+    "feature_name": "Lucid Standalone Clock App",
+    "category": "Standalone Desktop Apps",
+    "source_project": "Lucid",
+    "source_files": [
+      "lucidclock/ClockApp.qml",
+      "Timers.qml"
+    ],
+    "user_facing_behavior": "Dedicated M3 Expressive desktop application for Alarms, World Clocks, Multi-Timers, Lap Stopwatch, and Pomodoro focus sessions.",
+    "settings_keys": [
+      "scy.providers.lucid.clock_app.* (5 keys)",
+      "Prefs.pomodoro*",
+      "Prefs.timer*"
+    ],
+    "keybindings": [
+      "Launched from Launcher or Calendar popover"
+    ],
+    "ipc_dbus_socket": [
+      "Shares Timers.qml state with Lucid bar/calendar"
+    ],
+    "wayland_hyprland_hooks": [
+      "Standard Wayland toplevel"
+    ],
+    "visual_presentation": "Material 3 Expressive morphing shapes & expressive numerals",
+    "dependencies": [
+      "quickshell"
+    ],
+    "conflicts_risks": "Timer state sync when Mandara Pomodoro plugin is used.",
+    "classification": "Class A (Lucid-only)",
+    "scy_shell_target_design": "Preserve 100% intact and bridge timer/pomodoro state over Scy-Shell Event Bus."
+  },
+  {
+    "feature_id": "A-04",
+    "feature_name": "Desktop File & Folder Icons Canvas (~/Desktop)",
+    "category": "Desktop Surface",
+    "source_project": "Lucid",
+    "source_files": [
+      "Desktop.qml",
+      "DesktopIcons.qml",
+      "support/desktop-icons.py"
+    ],
+    "user_facing_behavior": "Full interactive desktop icon grid for ~/Desktop (files, folders, .desktop launchers, Trash, Home) with rubber-band selection, drag-and-drop move/copy, inline F2 rename, thumbnails, context menus, and 17 keyboard shortcuts.",
+    "settings_keys": [
+      "Prefs.desktopIcons*",
+      "DesktopIcons 17 shortcut actions"
+    ],
+    "keybindings": [
+      "F2, Del, Shift+Del, Ctrl+C/X/V/A/Z, Enter, Space, Menu (when desktop focused)"
+    ],
+    "ipc_dbus_socket": [
+      "support/desktop-icons.py JSON helper"
+    ],
+    "wayland_hyprland_hooks": [
+      "wlr-layer-shell LAYER_BOTTOM"
+    ],
+    "visual_presentation": "M3 Expressive icon tiles, rubber-band pill marquee, Glass context menu",
+    "dependencies": [
+      "quickshell",
+      "python3"
+    ],
+    "conflicts_risks": "Layer Z-order & pointer hit-testing with desktop widgets.",
+    "classification": "Class A (Lucid-only)",
+    "scy_shell_target_design": "Preserve 100% intact; compose cleanly with widget input regions via Scy-Shell Layer Coordinator."
+  },
+  {
+    "feature_id": "A-05",
+    "feature_name": "Jelly Squash-and-Stretch Physics & MaterialShape Organic Polygons",
+    "category": "Visual Identity & Motion",
+    "source_project": "Lucid",
+    "source_files": [
+      "Jelly.qml",
+      "MaterialShape.qml",
+      "Shapes.js"
+    ],
+    "user_facing_behavior": "Signature M3 Expressive directional velocity-driven squash-and-stretch deformation (Jelly) and morphing geometric cookies/clovers/scallops/arches across UI controls, avatars, clocks, and photo frames.",
+    "settings_keys": [
+      "Prefs.jelly",
+      "Prefs.jellyAmount",
+      "Prefs.motionScale",
+      "Prefs.cornerScale"
+    ],
+    "keybindings": [],
+    "ipc_dbus_socket": [],
+    "wayland_hyprland_hooks": [],
+    "visual_presentation": "Defining visual signature of Lucid 2 / Material 3 Expressive",
+    "dependencies": [
+      "quickshell"
+    ],
+    "conflicts_risks": "Mandara GPUI surfaces lack M3 Expressive cookie shapes & Jelly deformation natively.",
+    "classification": "Class A (Lucid-only \u2014 promoted to Scy-Shell Primary Identity)",
+    "scy_shell_target_design": "Retain natively in all Lucid surfaces AND port M3 Expressive SVG/path cookie shapes, HCT tokens, Google Sans, and spring parameters into Scy-Shell's default M3-Expressive Look for Mandara GPUI surfaces."
+  },
+  {
+    "feature_id": "A-06",
+    "feature_name": "On-Screen Virtual Keyboard (lucidkeys)",
+    "category": "Input & Accessibility",
+    "source_project": "Lucid",
+    "source_files": [
+      "lucidkeys/Keyboard.qml",
+      "lucidlock/parts/OnScreenKeys.qml"
+    ],
+    "user_facing_behavior": "Floating/docked Wayland touch & mouse virtual keyboard supporting XKB layouts, modifiers, emoji switch, and lock-screen password entry.",
+    "settings_keys": [
+      "scy.providers.lucid.keys.* (4 keys)",
+      "Prefs.lockOsk*"
+    ],
+    "keybindings": [
+      "Super+K / IPC toggle `keys`"
+    ],
+    "ipc_dbus_socket": [
+      "qs ipc call keys toggle"
+    ],
+    "wayland_hyprland_hooks": [
+      "wlr-layer-shell LAYER_OVERLAY (no focus steal), wtype"
+    ],
+    "visual_presentation": "M3 Expressive keycaps with Jelly press feedback",
+    "dependencies": [
+      "quickshell",
+      "wtype"
+    ],
+    "conflicts_risks": "None.",
+    "classification": "Class A (Lucid-only)",
+    "scy_shell_target_design": "Preserve 100% intact across both session and lock screen."
+  },
+  {
+    "feature_id": "A-07",
+    "feature_name": "SDDM Theme Synced with Per-User Lock Layout",
+    "category": "Display Manager / Pre-Auth",
+    "source_project": "Lucid",
+    "source_files": [
+      "support/sddm/lucid/",
+      "support/sync-sddm.sh",
+      "lucidlock/parts/Catalog.js"
+    ],
+    "user_facing_behavior": "Qt6 SDDM theme sharing the exact 6 presets and slot widgets of lucidlock, synced per-user via sync-sddm.sh.",
+    "settings_keys": [
+      "scy.providers.lucid.sddm.* (25 keys)",
+      "Prefs.lockPreset",
+      "Prefs.lockSlots"
+    ],
+    "keybindings": [],
+    "ipc_dbus_socket": [
+      "sddm-helper"
+    ],
+    "wayland_hyprland_hooks": [
+      "SDDM greeter session"
+    ],
+    "visual_presentation": "Material 3 Expressive SDDM login screen",
+    "dependencies": [
+      "sddm",
+      "qt6-declarative"
+    ],
+    "conflicts_risks": "System-level mutual exclusion with greetd.service (Mandara Greeter).",
+    "classification": "Class A (Lucid-only \u2014 paired with B-09 greetd)",
+    "scy_shell_target_design": "Preserve 100% intact; installer & Scy-Shell Studio allow explicit choice between Lucid SDDM, Mandara greetd, or keeping existing DM untouched."
+  },
+  {
+    "feature_id": "A-08",
+    "feature_name": "Hyprland Solo Mode, Cursor Tilt & Shake-to-Find Pointer",
+    "category": "Compositor Extensions",
+    "source_project": "Lucid",
+    "source_files": [
+      "support/hypr/modules/solo.lua",
+      "support/hypr/modules/pointer.lua",
+      "HyprConfig.qml"
+    ],
+    "user_facing_behavior": "Smart single-window borderless/gapless mode (`lucid.solo`), velocity-based cursor tilt, and shake-mouse-to-enlarge/highlight cursor (`lucid.find_pointer`).",
+    "settings_keys": [
+      "lucid.solo",
+      "lucid.cursor_tilt",
+      "lucid.cursor_tilt_apps",
+      "lucid.find_pointer"
+    ],
+    "keybindings": [],
+    "ipc_dbus_socket": [
+      "Hyprland Lua event listeners"
+    ],
+    "wayland_hyprland_hooks": [
+      "Hyprland 0.55+ Lua runtime hooks"
+    ],
+    "visual_presentation": "Overlay locator ring + seamless window framing",
+    "dependencies": [
+      "hyprland >= 0.55"
+    ],
+    "conflicts_risks": "Must live inside Scy-Shell's modular Lua generator so Mandara compositor edits never clobber it.",
+    "classification": "Class A (Lucid-only)",
+    "scy_shell_target_design": "Preserve 100% intact in Scy-Shell Hyprland Lua module set and expose toggles in Scy-Shell Studio -> Hyprland."
+  },
+  {
+    "feature_id": "A-09",
+    "feature_name": "Bluetooth OBEX File Receiver Daemon & Toast Inbox",
+    "category": "Connectivity",
+    "source_project": "Lucid",
+    "source_files": [
+      "support/bt-receive.py",
+      "Bluetooth.qml"
+    ],
+    "user_facing_behavior": "Receives incoming Bluetooth files via org.bluez.obex.Agent1 with interactive Accept/Decline toast and automatic Downloads placement.",
+    "settings_keys": [
+      "Prefs.btReceive",
+      "Prefs.btAutoAcceptTrusted"
+    ],
+    "keybindings": [],
+    "ipc_dbus_socket": [
+      "org.bluez.obex.Agent1"
+    ],
+    "wayland_hyprland_hooks": [],
+    "visual_presentation": "Interactive transfer progress toast",
+    "dependencies": [
+      "bluez-obex",
+      "python3-dbus-next"
+    ],
+    "conflicts_risks": "None.",
+    "classification": "Class A (Lucid-only)",
+    "scy_shell_target_design": "Preserve 100% intact and route transfer prompts to whichever Toast provider is active."
+  },
+  {
+    "feature_id": "B-01",
+    "feature_name": "Sandboxed WASM Plugin Host (wasm32-wasip2) & 88 Built-in Plugins",
+    "category": "Plugin Ecosystem",
+    "source_project": "Mandara",
+    "source_files": [
+      "crates/mandara-plugin-api/",
+      "crates/mandara-plugin-host/",
+      "crates/mandara-ui/src/plugins/",
+      "assets/catalog.json"
+    ],
+    "user_facing_behavior": "88 built-in bar/panel/desktop/launcher plugins (Docker, Systemd, Tailscale, WireGuard, SSH, Git watcher, Port killer, Stocks/Crypto, RSS, Prayer Times, 3D Game Shelf, Kanban, etc.) PLUS capability-sandboxed third-party WebAssembly plugins via Wasmtime.",
+    "settings_keys": [
+      "/plugins/enabled",
+      "/plugins/disabled",
+      "/plugins/approved_capabilities/*",
+      "/plugins/settings/*"
+    ],
+    "keybindings": [
+      "Super+Shift+P (Plugin Drawer) + per-plugin chords"
+    ],
+    "ipc_dbus_socket": [
+      "mandara plugin install/list/enable/disable"
+    ],
+    "wayland_hyprland_hooks": [
+      "Rendered in Mandara GPUI surfaces or bridged to Lucid bar via Scy-Shell Plugin Pill"
+    ],
+    "visual_presentation": "GPUI native cards styled with Scy-Shell M3 Expressive Look tokens by default, or any of 19 Mandara Looks",
+    "dependencies": [
+      "wasmtime (compiled in mandara binary)"
+    ],
+    "conflicts_risks": "Plugin capability prompts must surface cleanly in Scy-Shell Studio.",
+    "classification": "Class B (Mandara-only)",
+    "scy_shell_target_design": "Preserve all 88 built-in plugins + WASM host! Expose a 'Scy-Shell Plugin Drawer' triggerable directly from Lucid's Bar even when Lucid Bar is active!"
+  },
+  {
+    "feature_id": "B-02",
+    "feature_name": "Local AI Command Agent (FunctionGemma-270M / Qwen3-0.6B) & Whisper Voice Input",
+    "category": "AI & Natural Language",
+    "source_project": "Mandara",
+    "source_files": [
+      "crates/mandara-agent/"
+    ],
+    "user_facing_behavior": "100% offline on-device LLM agent (`candle`) that translates natural-language text or spoken voice commands into validated shell & compositor tool calls.",
+    "settings_keys": [
+      "/integrations/agent/*"
+    ],
+    "keybindings": [
+      "Super+Shift+A"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc agent ..."
+    ],
+    "wayland_hyprland_hooks": [
+      "Dispatches actions through Scy-Shell Core to active providers & Hyprland"
+    ],
+    "visual_presentation": "Floating M3-styled command pill / Launcher `!ai` mode",
+    "dependencies": [
+      "Opt-in user model download (never bundled)"
+    ],
+    "conflicts_risks": "Model weights licensing (Gemma Terms) -> strictly opt-in user download with consent modal.",
+    "classification": "Class B (Mandara-only)",
+    "scy_shell_target_design": "Preserve 100% intact and extend tool-call router to control BOTH Lucid and Mandara active providers!"
+  },
+  {
+    "feature_id": "B-03",
+    "feature_name": "Wallgen Procedural GPU/CPU Wallpaper & Video Generator (13 Styles)",
+    "category": "Wallpaper & Generative Art",
+    "source_project": "Mandara",
+    "source_files": [
+      "crates/mandara-wallgen/",
+      "crates/mandara-config/src/wallgen.rs"
+    ],
+    "user_facing_behavior": "Generates 4K/8K procedural still wallpapers and seamless loop MP4/WebM videos in 13 algorithmic styles seeded from the active palette, with scheduled regeneration.",
+    "settings_keys": [
+      "scy.providers.mandara.wallgen.* (21 keys)"
+    ],
+    "keybindings": [
+      "Super+Shift+W"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc wallgen ..."
+    ],
+    "wayland_hyprland_hooks": [
+      "Outputs PNG/JPEG/MP4 directly consumable by BOTH Lucid (`awww`/`LiveShell`) and Mandara (`mandara-wallpaper`)!"
+    ],
+    "visual_presentation": "Interactive Wallgen Studio previewer",
+    "dependencies": [
+      "mandara-wallgen"
+    ],
+    "conflicts_risks": "None when routed through Scy-Shell Wallpaper Coordinator.",
+    "classification": "Class B (Mandara-only)",
+    "scy_shell_target_design": "Preserve 100% intact and wire generated wallpapers/videos into Scy-Shell's active wallpaper renderer + Matugen palette regeneration!"
+  },
+  {
+    "feature_id": "B-04",
+    "feature_name": "19 Complete Architectural Looks & Surface Grain / Chromatic Glass",
+    "category": "Visual Identity & Presets",
+    "source_project": "Mandara",
+    "source_files": [
+      "crates/mandara-ui/src/looks/",
+      "crates/mandara-config/src/grain.rs"
+    ],
+    "user_facing_behavior": "19 holistic aesthetic transformations (`corniche-dusk`, `pharos-ink`, `phosphor`, `cupertino`, `redmond`, `library-desk`, `ink-rush`, `sea-glass`, etc.) plus procedural film/paper `SurfaceGrain` and refractive `ChromaticGlass`.",
+    "settings_keys": [
+      "/appearance/look",
+      "/grain/*",
+      "/style/*"
+    ],
+    "keybindings": [
+      "Super+Alt+T (Look/Theme quick switcher)"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc look set <id>"
+    ],
+    "wayland_hyprland_hooks": [
+      "Syncs border/rounding/shadow hints"
+    ],
+    "visual_presentation": "19 distinct visual languages on Mandara GPUI surfaces",
+    "dependencies": [
+      "mandara-ui"
+    ],
+    "conflicts_risks": "Must default to Scy-Shell's primary Material 3 Expressive look while keeping all 19 Mandara Looks selectable.",
+    "classification": "Class B (Mandara-only)",
+    "scy_shell_target_design": "Add 20th Look (`scy-m3-expressive`, default) to Mandara so GPUI surfaces match Lucid 2 out of the box, while preserving all 19 original Looks in Studio!"
+  },
+  {
+    "feature_id": "B-05",
+    "feature_name": "Multi-Compositor Backend Abstraction (11 Wayland Compositors)",
+    "category": "Compositor Support",
+    "source_project": "Mandara",
+    "source_files": [
+      "crates/mandara-compositor/src/"
+    ],
+    "user_facing_behavior": "Native workspace, window, monitor, and config adapters for Hyprland, Niri, Sway, Scroll, MangoWC, Miracle WM, River, Labwc, COSMIC, KDE KWin, and generic wlr-foreign-toplevel.",
+    "settings_keys": [
+      "/compositor/*"
+    ],
+    "keybindings": [
+      "Auto-translated per compositor syntax"
+    ],
+    "ipc_dbus_socket": [
+      "Per-compositor IPC sockets"
+    ],
+    "wayland_hyprland_hooks": [
+      "wlr-foreign-toplevel-management, ext-workspace"
+    ],
+    "visual_presentation": "Transparent backend service",
+    "dependencies": [
+      "mandara-compositor"
+    ],
+    "conflicts_risks": "Lucid's HyprConfig.qml assumes Hyprland; Scy-Shell Core exposes normalized workspace/window state on non-Hyprland compositors too.",
+    "classification": "Class B (Mandara-only)",
+    "scy_shell_target_design": "Hyprland is primary target; all other 10 compositor backends remain preserved in Scy-Shell Core!"
+  },
+  {
+    "feature_id": "B-06",
+    "feature_name": "Screen Time & Per-App Focus Analytics",
+    "category": "Productivity & Analytics",
+    "source_project": "Mandara",
+    "source_files": [
+      "crates/mandara-services/src/screen_time.rs"
+    ],
+    "user_facing_behavior": "Tracks active window focus duration per app/category locally, with daily/weekly charts, app usage limits, and break nudges.",
+    "settings_keys": [
+      "/screen_time/*"
+    ],
+    "keybindings": [],
+    "ipc_dbus_socket": [
+      "mandara-services background tracker"
+    ],
+    "wayland_hyprland_hooks": [
+      "Active window event stream"
+    ],
+    "visual_presentation": "Studio Screen Time charts + Desktop/Sidebar widget",
+    "dependencies": [
+      "mandara-services"
+    ],
+    "conflicts_risks": "Zero exclusive conflict (read-only focus listener).",
+    "classification": "Class B (Mandara-only)",
+    "scy_shell_target_design": "Enable cleanly in Scy-Shell background services (opt-out toggle preserved) and surface analytics in Scy-Shell Studio."
+  },
+  {
+    "feature_id": "B-07",
+    "feature_name": "CalDAV / Google / Microsoft OAuth2 Cloud Calendar & Mail Sync",
+    "category": "Cloud & Productivity",
+    "source_project": "Mandara",
+    "source_files": [
+      "crates/mandara-services/src/calendar_sync.rs",
+      "crates/mandara-services/src/mail.rs"
+    ],
+    "user_facing_behavior": "Cloud sync with CalDAV, Google Calendar, Outlook, and IMAP/OAuth unread mail badges stored in SecretService keyring.",
+    "settings_keys": [
+      "/calendar/*",
+      "/integrations/mail/*"
+    ],
+    "keybindings": [],
+    "ipc_dbus_socket": [
+      "org.freedesktop.secrets"
+    ],
+    "wayland_hyprland_hooks": [],
+    "visual_presentation": "Calendar events feed into BOTH Mandara Calendar and Lucid Calendar/Lock Agenda via Scy-Shell Event Bus!",
+    "dependencies": [
+      "gnome-keyring or kwallet"
+    ],
+    "conflicts_risks": "None.",
+    "classification": "Class B (Mandara-only)",
+    "scy_shell_target_design": "Preserve 100% intact and bridge synced events into Lucid's `lucidcalendar` & `LockAgenda.qml`!"
+  },
+  {
+    "feature_id": "B-08",
+    "feature_name": "3D Steam / Lutris / Heroic Game Shelf",
+    "category": "Gaming",
+    "source_project": "Mandara",
+    "source_files": [
+      "crates/mandara-ui/src/plugins/games/"
+    ],
+    "user_facing_behavior": "Scans local Steam VDF, Lutris SQLite, and Heroic libraries to render an interactive cover-art game launcher shelf with playtime badges and GameMode auto-engage.",
+    "settings_keys": [
+      "/plugins/settings/games/*"
+    ],
+    "keybindings": [
+      "Super+Shift+G"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc plugin toggle games"
+    ],
+    "wayland_hyprland_hooks": [
+      "Triggers Gamemode optimizations on launch"
+    ],
+    "visual_presentation": "GPUI hardware-accelerated cover shelf",
+    "dependencies": [
+      "mandara-ui"
+    ],
+    "conflicts_risks": "None.",
+    "classification": "Class B (Mandara-only)",
+    "scy_shell_target_design": "Preserve 100% intact and link launch events to Lucid/Scy-Shell GameMode state."
+  },
+  {
+    "feature_id": "B-09",
+    "feature_name": "greetd Native Wayland Login Greeter (`mandara-greeter`)",
+    "category": "Display Manager / Pre-Auth",
+    "source_project": "Mandara",
+    "source_files": [
+      "crates/mandara-greeter/"
+    ],
+    "user_facing_behavior": "Standalone Wayland login greeter for greetd supporting all 6 AuthDesigns, video/shader/orb backgrounds, spring physics, and accessibility options.",
+    "settings_keys": [
+      "scy.providers.mandara.greeter.* (115 keys in /etc/mandara/greeter.toml)"
+    ],
+    "keybindings": [],
+    "ipc_dbus_socket": [
+      "GREETD_SOCK"
+    ],
+    "wayland_hyprland_hooks": [
+      "Runs inside compositor session launched by greetd"
+    ],
+    "visual_presentation": "6 AuthDesigns (including MaterialYou)",
+    "dependencies": [
+      "greetd"
+    ],
+    "conflicts_risks": "Systemd display-manager.service mutual exclusion with SDDM (A-07).",
+    "classification": "Class B (Mandara-only \u2014 paired with A-07 SDDM)",
+    "scy_shell_target_design": "Preserve 100% intact alongside Lucid SDDM; user chooses SDDM, greetd, or Neither in installer & Studio."
+  },
+  {
+    "feature_id": "B-10",
+    "feature_name": "Edge Drawers, Side Bars, Hot Corners & Screen Bezel Corners",
+    "category": "Shell Surfaces",
+    "source_project": "Mandara",
+    "source_files": [
+      "crates/mandara-ui/src/sidebar/",
+      "crates/mandara-config/src/edges.rs",
+      "crates/mandara-ui/src/corners.rs"
+    ],
+    "user_facing_behavior": "Slide-out screen-edge drawers, persistent secondary sidebars, 4 configurable hot-corner dwell/click triggers, and rounded outer screen bezel masks.",
+    "settings_keys": [
+      "/sidebar/*",
+      "/side_bars/*",
+      "/edges/*",
+      "/hot_corners/*",
+      "/screen_corners/*"
+    ],
+    "keybindings": [
+      "Edge hover / configurable chord"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc sidebar toggle"
+    ],
+    "wayland_hyprland_hooks": [
+      "wlr-layer-shell exclusive/overlay edges"
+    ],
+    "visual_presentation": "M3 Expressive or selected Look edge sheets",
+    "dependencies": [
+      "mandara-ui"
+    ],
+    "conflicts_risks": "Edge hit-boxes must avoid active Bar/Dock edge.",
+    "classification": "Class B (Mandara-only)",
+    "scy_shell_target_design": "Preserve 100% intact; Scy-Shell Layer Coordinator auto-suppresses edge triggers along edges occupied by an active Bar or Dock."
+  },
+  {
+    "feature_id": "B-11",
+    "feature_name": "24-App Tamper-Safe Theme Ledger & `Config doctor`",
+    "category": "Theming & Diagnostics",
+    "source_project": "Mandara",
+    "source_files": [
+      "crates/mandara-config/src/templates/",
+      "crates/mandara-config/src/doctor.rs"
+    ],
+    "user_facing_behavior": "Generates theme configs for 24 external apps with SHA-256 ledger tracking so user edits are NEVER overwritten without consent, plus `doctor` health checks.",
+    "settings_keys": [
+      "/apps/*"
+    ],
+    "keybindings": [],
+    "ipc_dbus_socket": [
+      "scy-shell doctor"
+    ],
+    "wayland_hyprland_hooks": [],
+    "visual_presentation": "Studio App-Theming matrix & Doctor report",
+    "dependencies": [
+      "mandara-config"
+    ],
+    "conflicts_risks": "Overlaps on 11 target files with Lucid's `render-templates.sh`.",
+    "classification": "Class B/F (Unified into Scy-Shell Theme Coordinator)",
+    "scy_shell_target_design": "Merge Lucid's Matugen templates + Mandara's 24-app SHA-256 ledger into ONE Scy-Shell App-Theme Coordinator (28 total app targets with SHA-256 tamper protection)."
+  },
+  {
+    "feature_id": "D-01",
+    "feature_name": "Top / Side / Bottom Status Bar",
+    "category": "Core Shell Surfaces",
+    "source_project": "Both (Materially Different)",
+    "source_files": [
+      "Lucid: lucidbar/*.qml",
+      "Mandara: crates/mandara-ui/src/bar/, bar_styles.rs"
+    ],
+    "user_facing_behavior": "Lucid offers M3 Expressive islands/pills/vertical bars with Jelly physics & 22 modules; Mandara offers 9 architectural BarStyles, 19 slot presets, CPU low-VRAM `shm_canvas` mode, and 88 bar plugins.",
+    "settings_keys": [
+      "Lucid: Prefs.bar* + show* (58 keys)",
+      "Mandara: /bar/* (74 keys)"
+    ],
+    "keybindings": [
+      "Super+Shift+B (toggle bar visibility)"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc bar toggle"
+    ],
+    "wayland_hyprland_hooks": [
+      "wlr-layer-shell LAYER_TOP + exclusive zone"
+    ],
+    "visual_presentation": "Selectable: Lucid M3 Expressive Bar (Default) OR Mandara Bar (with M3-Expressive Look or any of 9 BarStyles/19 Looks) OR Hybrid Per-Monitor!",
+    "dependencies": [
+      "quickshell / mandara-ui"
+    ],
+    "conflicts_risks": "Double exclusive-zone reservation if both run on same monitor edge.",
+    "classification": "Class D (Both \u2014 Selectable Provider & Presentation)",
+    "scy_shell_target_design": "Default Provider: Lucid Bar. User can switch globally or per-monitor to Mandara Bar, OR embed a 'Mandara Plugins Pill' inside Lucid Bar!"
+  },
+  {
+    "feature_id": "D-02",
+    "feature_name": "Application Dock",
+    "category": "Core Shell Surfaces",
+    "source_project": "Both (Materially Different)",
+    "source_files": [
+      "Lucid: luciddock/*.qml",
+      "Mandara: crates/mandara-ui/src/dock/"
+    ],
+    "user_facing_behavior": "Pinned & running apps dock with auto-hide/dodge, live window hover previews (Lucid ScreencopyView), Trash, and bounce/Jelly magnification.",
+    "settings_keys": [
+      "Lucid: Prefs.dock* (21 keys)",
+      "Mandara: /dock/* (24 keys)"
+    ],
+    "keybindings": [
+      "IPC dock toggle"
+    ],
+    "ipc_dbus_socket": [
+      "Shared pinned-apps adapter (`~/.config/scy-shell/pinned-apps.json`)"
+    ],
+    "wayland_hyprland_hooks": [
+      "wlr-layer-shell LAYER_TOP/OVERLAY"
+    ],
+    "visual_presentation": "Lucid M3 Expressive Glass Dock (Default) or Mandara GPUI Dock",
+    "dependencies": [
+      "quickshell / mandara-ui"
+    ],
+    "conflicts_risks": "Simultaneous bottom-edge collision.",
+    "classification": "Class D (Both \u2014 Selectable Provider, Shared Pinned Apps)",
+    "scy_shell_target_design": "Default Provider: Lucid Dock. Pinned apps list is two-way synced."
+  },
+  {
+    "feature_id": "D-03",
+    "feature_name": "Application Launcher & Command Palette",
+    "category": "Core Shell Surfaces",
+    "source_project": "Both (Materially Different)",
+    "source_files": [
+      "Lucid: lucidlaunch/*.qml",
+      "Mandara: crates/mandara-ui/src/launcher/"
+    ],
+    "user_facing_behavior": "Lucid provides M3 Expressive morphing launcher (apps, calc, cliphist, emoji, wallpapers, windows, files, shell); Mandara adds WASM plugin providers, SSH/Docker/Dev-ports, and Local AI agent.",
+    "settings_keys": [
+      "Lucid: Prefs.launcher* (19 keys)",
+      "Mandara: /launcher/* (38 keys)"
+    ],
+    "keybindings": [
+      "Super+Space"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc launcher toggle [mode]"
+    ],
+    "wayland_hyprland_hooks": [
+      "wlr-layer-shell LAYER_OVERLAY keyboard-interactive"
+    ],
+    "visual_presentation": "Lucid M3 Expressive Launcher (Default) + Query Federation to Mandara AI & 88 Plugins, OR full Mandara GPUI Launcher",
+    "dependencies": [
+      "quickshell / mandara-ui"
+    ],
+    "conflicts_risks": "Exclusive keyboard grab if both open simultaneously.",
+    "classification": "Class D (Both \u2014 Selectable Provider + Query Federation Bridge)",
+    "scy_shell_target_design": "Default Provider: Lucid Launcher with live JSON-RPC query federation to `mandara-agent` and `mandara-plugin-host`; full Mandara Launcher also selectable."
+  },
+  {
+    "feature_id": "D-04",
+    "feature_name": "Quick Settings / Control Centre",
+    "category": "Core Shell Surfaces",
+    "source_project": "Both (Materially Different)",
+    "source_files": [
+      "Lucid: lucidquick/*.qml",
+      "Mandara: crates/mandara-ui/src/control_center/"
+    ],
+    "user_facing_behavior": "Expandable Wi-Fi, BT, Audio per-app mixer, Night Light, Power profile, Caffeine, GameMode, VPN/Tailscale/Docker tiles, and media card.",
+    "settings_keys": [
+      "Lucid: Prefs.system* (16 keys)",
+      "Mandara: /panels/* (29 keys)"
+    ],
+    "keybindings": [
+      "Super+S / Bar click"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc quick toggle"
+    ],
+    "wayland_hyprland_hooks": [
+      "wlr-layer-shell LAYER_OVERLAY"
+    ],
+    "visual_presentation": "Lucid M3 Expressive Control Sheet (Default) or Mandara Control Center",
+    "dependencies": [
+      "PipeWire, NetworkManager, BlueZ, UPower"
+    ],
+    "conflicts_risks": "State divergence if DND / Night Light / Caffeine not synced.",
+    "classification": "Class D (Both \u2014 Selectable Provider, Shared State Bus)",
+    "scy_shell_target_design": "Default Provider: Lucid Control Centre; DND, Night Light, Caffeine, and GameMode states synchronized over Scy-Shell Core."
+  },
+  {
+    "feature_id": "D-05",
+    "feature_name": "Notifications Daemon, Toasts & Notification Centre",
+    "category": "Notifications & Exclusive D-Bus",
+    "source_project": "Both (Exclusive D-Bus Bus Name)",
+    "source_files": [
+      "Lucid: Notifs.qml, lucidtoast/*.qml",
+      "Mandara: crates/mandara-services/src/notifications.rs, crates/mandara-ui/src/toast/"
+    ],
+    "user_facing_behavior": "Desktop notification server (`org.freedesktop.Notifications`) with grouping, inline actions, urgency rules, DND/Quiet Hours, persistent history, and floating toasts.",
+    "settings_keys": [
+      "Lucid: Prefs.notif* + toast* + dnd* (26 keys)",
+      "Mandara: /notifications/* (34 keys)"
+    ],
+    "keybindings": [
+      "Super+N (history), Super+Shift+N (DND)"
+    ],
+    "ipc_dbus_socket": [
+      "org.freedesktop.Notifications (EXCLUSIVE!)"
+    ],
+    "wayland_hyprland_hooks": [
+      "wlr-layer-shell LAYER_OVERLAY"
+    ],
+    "visual_presentation": "Separable Functional Provider & Toast Presentation Renderer!",
+    "dependencies": [
+      "D-Bus session bus"
+    ],
+    "conflicts_risks": "CRITICAL: Mandara's `hub.rs` claims `org.freedesktop.Notifications` unconditionally at boot. Must gate in `mandara-working`.",
+    "classification": "Class D + Class F (Exclusive D-Bus Resource + Separable Toast Renderer)",
+    "scy_shell_target_design": "Default Provider & Renderer: Lucid (`Notifs.qml` + `lucidtoast`). Gate `spawn_notification_service()` in `mandara-working`; allow cross-routing Toast rendering over Scy-Shell Event Bus."
+  },
+  {
+    "feature_id": "C-01",
+    "feature_name": "On-Screen Display (OSD: Volume, Brightness, Mic, Caps/Layout)",
+    "category": "Shell Feedback",
+    "source_project": "Both (Equivalent Role)",
+    "source_files": [
+      "Lucid: lucidosd/*.qml",
+      "Mandara: crates/mandara-ui/src/osd/"
+    ],
+    "user_facing_behavior": "Transient pill HUD for audio volume/mute, backlight brightness, keyboard backlight, mic mute, and Caps/Num lock.",
+    "settings_keys": [
+      "Lucid: Prefs.osd* (9 keys)",
+      "Mandara: /osd/* (16 keys)"
+    ],
+    "keybindings": [
+      "XF86Audio*, XF86MonBrightness*, Caps_Lock"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc osd ..."
+    ],
+    "wayland_hyprland_hooks": [
+      "wlr-layer-shell LAYER_OVERLAY (click-through)"
+    ],
+    "visual_presentation": "Lucid M3 Expressive Jelly OSD (Default) or Mandara OSD",
+    "dependencies": [
+      "PipeWire, brightnessctl / sysfs"
+    ],
+    "conflicts_risks": "Double OSD popups on XF86 keys if both listen un-gated.",
+    "classification": "Class C (Equivalent -> Lucid Default, Mandara Selectable)",
+    "scy_shell_target_design": "Single active OSD renderer gated by `scy.active_providers.osd` (default: `lucid`)."
+  },
+  {
+    "feature_id": "D-06",
+    "feature_name": "Desktop Widgets Canvas",
+    "category": "Desktop Surface",
+    "source_project": "Both (Materially Different)",
+    "source_files": [
+      "Lucid: Widgets.qml, lucidwidgets/*.qml",
+      "Mandara: crates/mandara-ui/src/desktop/, widget_kinds.rs"
+    ],
+    "user_facing_behavior": "Lucid offers 25 M3 Expressive widgets (88 variants: cookie photo frames, morphing clocks, Sound Weaver, habits, lyrics); Mandara offers GPUI + WASM widgets.",
+    "settings_keys": [
+      "Lucid: ~/.config/quickshell/widgets.json + 58 opts",
+      "Mandara: /desktop/* + widget instances"
+    ],
+    "keybindings": [
+      "Edit-mode toggle"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc widgets edit"
+    ],
+    "wayland_hyprland_hooks": [
+      "wlr-layer-shell LAYER_BOTTOM"
+    ],
+    "visual_presentation": "Lucid M3 Widgets (Default), Mandara Widgets, OR Coexisting Non-Overlapping Hybrid Mode!",
+    "dependencies": [
+      "quickshell / mandara-ui"
+    ],
+    "conflicts_risks": "Input region masking on `LAYER_BOTTOM`.",
+    "classification": "Class D (Both \u2014 Selectable OR Hybrid Coexistence!)",
+    "scy_shell_target_design": "Support `lucid` (default), `mandara`, AND `hybrid` mode using Wayland `wl_surface.set_input_region` bounding-box masks!"
+  },
+  {
+    "feature_id": "D-07",
+    "feature_name": "Wallpaper Engine (Static, Transitions, Video, Shaders & Wallgen)",
+    "category": "Desktop Surface",
+    "source_project": "Both (Materially Different)",
+    "source_files": [
+      "Lucid: Wallpapers.qml, LiveShell.qml, lucidwall/",
+      "Mandara: crates/mandara-ui/src/wallpaper/, mandara-wallgen/"
+    ],
+    "user_facing_behavior": "Lucid uses `awww` (10 transitions) + `LiveShell.qml` (MP4/WebM video & GLSL shaders); Mandara offers CPU-efficient `shm_canvas` / wgpu renderer + 13-style procedural `Wallgen`.",
+    "settings_keys": [
+      "Lucid: Prefs.wallpaper* + wallTrans* + live* (28 keys)",
+      "Mandara: /wallpaper/* + wallgen.* (49 keys)"
+    ],
+    "keybindings": [
+      "Super+W (Picker), Super+Shift+W (Wallgen)"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc wallpaper set <path>"
+    ],
+    "wayland_hyprland_hooks": [
+      "wlr-layer-shell LAYER_BACKGROUND (EXCLUSIVE per output)"
+    ],
+    "visual_presentation": "Lucid `awww`+`LiveShell` (Default) or Mandara `mandara-wallpaper`; `Wallgen` feeds BOTH!",
+    "dependencies": [
+      "awww, gst-libav / mandara-wallgen"
+    ],
+    "conflicts_risks": "Two `LAYER_BACKGROUND` surfaces waste ~40\u2013120 MB VRAM/RAM.",
+    "classification": "Class D + Class F (Exclusive Layer Surface + Shared Wallgen & Matugen Pipeline)",
+    "scy_shell_target_design": "Only ONE `LAYER_BACKGROUND` renderer runs (`lucid` default, `mandara` selectable). Setting or generating a wallpaper triggers Scy-Shell's single Matugen/OKLCH palette pipeline for BOTH engines."
+  },
+  {
+    "feature_id": "D-08",
+    "feature_name": "Wayland Session Lock (`ext-session-lock-v1`)",
+    "category": "Security & Auth",
+    "source_project": "Both (Exclusive Wayland Protocol)",
+    "source_files": [
+      "Lucid: lucidlock/*.qml",
+      "Mandara: crates/mandara-services/src/session_lock.rs, crates/mandara-ui/src/lock/"
+    ],
+    "user_facing_behavior": "Lucid offers 6 slot-customizable presets + 10 widgets + OSK; Mandara offers 6 `AuthDesign`s + freeform canvas placement.",
+    "settings_keys": [
+      "Lucid: Prefs.lock* + Catalog.js (63 keys)",
+      "Mandara: /lock/* (44 keys)"
+    ],
+    "keybindings": [
+      "Super+L"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc lock"
+    ],
+    "wayland_hyprland_hooks": [
+      "ext_session_lock_manager_v1 (STRICTLY ONE CLIENT)"
+    ],
+    "visual_presentation": "All 6 Lucid Lock Presets (Default) + All 6 Mandara AuthDesigns selectable in Studio!",
+    "dependencies": [
+      "PAM, fprintd (optional)"
+    ],
+    "conflicts_risks": "CRITICAL: Wayland `ext-session-lock-v1` rejects a second lock client with protocol error.",
+    "classification": "Class D + Class F (Exclusive Security Surface)",
+    "scy_shell_target_design": "Default Provider: Lucid Lock (`lucidlock`). User can switch to Mandara Lock (`mandara-lock`) in Studio; inactive lock engine has its lock handler strictly disabled."
+  },
+  {
+    "feature_id": "D-09",
+    "feature_name": "Screenshot, OCR, Annotation & Screen Recording",
+    "category": "Capture",
+    "source_project": "Both (Materially Different)",
+    "source_files": [
+      "Lucid: lucidshot/*.qml",
+      "Mandara: crates/mandara-ui/src/capture/, vendor/uni-ocr-0.2.0"
+    ],
+    "user_facing_behavior": "Lucid has interactive crop, vector annotations, Tesseract OCR, QR decode, color picker, and MP4/GIF screen recorder; Mandara has GPUI region capture + `uni-ocr`.",
+    "settings_keys": [
+      "Lucid: Prefs.shot* + record* + ShotOverlay (27 keys)",
+      "Mandara: capture keys"
+    ],
+    "keybindings": [
+      "Print, Super+Shift+S, Super+Shift+R"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc shot [region|window|screen|ocr]"
+    ],
+    "wayland_hyprland_hooks": [
+      "wlr-screencopy / grim / gpu-screen-recorder"
+    ],
+    "visual_presentation": "Lucid `LucidShot` Annotation Studio (Default) or Mandara Capture",
+    "dependencies": [
+      "grim, tesseract, zbar, gpu-screen-recorder / wf-recorder"
+    ],
+    "conflicts_risks": "Chord collision on `Print` and `Super+Shift+S`.",
+    "classification": "Class D (Lucid Default \u2014 Richer Annotation & Recording Suite)",
+    "scy_shell_target_design": "Default Provider: `LucidShot`, with Mandara Capture selectable."
+  },
+  {
+    "feature_id": "D-10",
+    "feature_name": "Workspace Overview, Expos\u00e9 & Window Switcher (Alt-Tab)",
+    "category": "Window Management UI",
+    "source_project": "Both (Materially Different)",
+    "source_files": [
+      "Lucid: lucidoverview/*.qml, lucidexpose/*.qml",
+      "Mandara: crates/mandara-ui/src/switcher/"
+    ],
+    "user_facing_behavior": "Lucid provides live `ScreencopyView` workspace grid drag-and-drop + live Expos\u00e9; Mandara provides fast cross-compositor keyboard switcher.",
+    "settings_keys": [
+      "Lucid: Prefs.overview*",
+      "Mandara: /switcher/* (18 keys)"
+    ],
+    "keybindings": [
+      "Super+Tab (Overview), Alt+Tab (Switcher)"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc overview / switcher"
+    ],
+    "wayland_hyprland_hooks": [
+      "Hyprland IPC / wlr-foreign-toplevel / Screencopy"
+    ],
+    "visual_presentation": "Lucid Live Thumbnail Overview/Expos\u00e9 (Default on Hyprland) + Mandara Switcher (Selectable)",
+    "dependencies": [
+      "quickshell / mandara-ui"
+    ],
+    "conflicts_risks": "Alt+Tab / Super+Tab bind ownership.",
+    "classification": "Class D (Both \u2014 Selectable per surface)",
+    "scy_shell_target_design": "Default on Hyprland: Lucid Overview & Expose; user can independently pick Lucid or Mandara for `Alt+Tab`."
+  },
+  {
+    "feature_id": "C-02",
+    "feature_name": "Clipboard History Manager",
+    "category": "Utilities & Exclusive Wayland Data-Control",
+    "source_project": "Both",
+    "source_files": [
+      "Lucid: lucidlaunch/Clipboard, wl-paste --watch cliphist",
+      "Mandara: crates/mandara-services/src/clipboard.rs"
+    ],
+    "user_facing_behavior": "Persistent text & image clipboard history, pin favorites, wipe, and sensitive password-manager exclusion.",
+    "settings_keys": [
+      "Lucid: Prefs.clipboard*",
+      "Mandara: /clipboard/* (15 keys)"
+    ],
+    "keybindings": [
+      "Super+V"
+    ],
+    "ipc_dbus_socket": [
+      "cliphist DB vs Mandara clipboard store"
+    ],
+    "wayland_hyprland_hooks": [
+      "ext-data-control-v1 / zwlr_data_control_manager_v1"
+    ],
+    "visual_presentation": "Lucid Launcher Clipboard mode (Default) or Mandara Clipboard popup",
+    "dependencies": [
+      "wl-clipboard, cliphist"
+    ],
+    "conflicts_risks": "Running BOTH watchers duplicates image storage in RAM/disk.",
+    "classification": "Class C + Class F (Single Active Watcher Daemon)",
+    "scy_shell_target_design": "Only ONE clipboard watcher runs (`cliphist` when Lucid clipboard is active; `mandara-services::clipboard` when Mandara is active)."
+  },
+  {
+    "feature_id": "F-01",
+    "feature_name": "Polkit Authentication Agent (`unix-session`)",
+    "category": "Exclusive Security Infrastructure",
+    "source_project": "Both",
+    "source_files": [
+      "Lucid: Polkit.qml",
+      "Mandara: crates/mandara-services/src/polkit.rs"
+    ],
+    "user_facing_behavior": "Graphical privilege escalation modal for `pkexec` / systemd / package operations.",
+    "settings_keys": [
+      "Mandara: /general/polkit_agent",
+      "Scy-Shell: scy.active_providers.polkit"
+    ],
+    "keybindings": [],
+    "ipc_dbus_socket": [
+      "org.freedesktop.PolicyKit1.Authority::RegisterAuthenticationAgent (EXCLUSIVE)"
+    ],
+    "wayland_hyprland_hooks": [
+      "LAYER_OVERLAY modal"
+    ],
+    "visual_presentation": "Lucid M3 Polkit Modal (Default) or Mandara Polkit Modal",
+    "dependencies": [
+      "polkit"
+    ],
+    "conflicts_risks": "CRITICAL: `polkitd` rejects the second agent registration.",
+    "classification": "Class F (Exclusive Session Resource)",
+    "scy_shell_target_design": "Default: Lucid `Polkit.qml`; Scy-Shell sets Mandara `/general/polkit_agent = false` automatically unless user selects Mandara Polkit."
+  },
+  {
+    "feature_id": "F-02",
+    "feature_name": "Night Light / Display Gamma Control (`zwlr_gamma_control_v1`)",
+    "category": "Exclusive Display Protocol",
+    "source_project": "Both",
+    "source_files": [
+      "Lucid: NightLight (`hyprsunset`)",
+      "Mandara: crates/mandara-services/src/gamma.rs"
+    ],
+    "user_facing_behavior": "Color temperature warmth (K) + sunrise/sunset schedule.",
+    "settings_keys": [
+      "Lucid: Prefs.nightLight* (6 keys)",
+      "Mandara: /night_light/* (11 keys)"
+    ],
+    "keybindings": [
+      "IPC toggle nightlight"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell ipc nightlight ..."
+    ],
+    "wayland_hyprland_hooks": [
+      "zwlr_gamma_control_manager_v1 (EXCLUSIVE PER wl_output)"
+    ],
+    "visual_presentation": "Controlled from either Quick Settings / Studio",
+    "dependencies": [
+      "hyprsunset OR Mandara native `gamma.rs`"
+    ],
+    "conflicts_risks": "CRITICAL: `zwlr_gamma_control_v1` rejects a second gamma client on the same monitor.",
+    "classification": "Class F (Exclusive Wayland Output Resource)",
+    "scy_shell_target_design": "Single active gamma backend (`hyprsunset` default on Hyprland with automatic fallback to `mandara-gamma` if `hyprsunset` absent)."
+  },
+  {
+    "feature_id": "F-03",
+    "feature_name": "System Tray (`org.kde.StatusNotifierWatcher` & `Host`)",
+    "category": "Shared D-Bus Infrastructure",
+    "source_project": "Both",
+    "source_files": [
+      "Lucid: Quickshell.Services.SystemTray",
+      "Mandara: crates/mandara-services/src/tray.rs"
+    ],
+    "user_facing_behavior": "SNI tray icons + DBusMenu context menus.",
+    "settings_keys": [
+      "Lucid: Prefs.tray*",
+      "Mandara: /bar/tray*"
+    ],
+    "keybindings": [],
+    "ipc_dbus_socket": [
+      "org.kde.StatusNotifierWatcher + org.kde.StatusNotifierHost-*"
+    ],
+    "wayland_hyprland_hooks": [],
+    "visual_presentation": "Rendered in active Bar",
+    "dependencies": [
+      "D-Bus"
+    ],
+    "conflicts_risks": "Verified in source: Mandara `tray.rs` gracefully falls back to `StatusNotifierHost` when `StatusNotifierWatcher` is already owned by Quickshell!",
+    "classification": "Class F (Shared Bus \u2014 Verified Peaceful Coexistence)",
+    "scy_shell_target_design": "Start Lucid/Quickshell Watcher first; both engines can display tray items cleanly."
+  },
+  {
+    "feature_id": "F-04",
+    "feature_name": "Bluetooth Pairing Agent (`org.bluez.Agent1`)",
+    "category": "Exclusive Connectivity Agent",
+    "source_project": "Both",
+    "source_files": [
+      "Lucid: support/bt-agent.py",
+      "Mandara: crates/mandara-services/src/bt_agent.rs"
+    ],
+    "user_facing_behavior": "Handles Bluetooth PIN, Passkey confirmation, and authorization prompts.",
+    "settings_keys": [
+      "Mandara: /bluetooth/pairing_agent",
+      "Scy-Shell: scy.active_providers.bt_agent"
+    ],
+    "keybindings": [],
+    "ipc_dbus_socket": [
+      "org.bluez.AgentManager1::RegisterAgent (DefaultAgent)"
+    ],
+    "wayland_hyprland_hooks": [],
+    "visual_presentation": "Pairing prompt modal/toast",
+    "dependencies": [
+      "bluez"
+    ],
+    "conflicts_risks": "Only one DefaultAgent receives BlueZ pairing requests.",
+    "classification": "Class F (Exclusive BlueZ DefaultAgent)",
+    "scy_shell_target_design": "Gate `bt-agent.py` vs `bt_agent.rs` via `scy.active_providers.bt_agent` (default: `lucid`)."
+  },
+  {
+    "feature_id": "F-05",
+    "feature_name": "Idle Management & DPMS (`ext-idle-notify-v1` / `hypridle`)",
+    "category": "Power & Session Lifecycle",
+    "source_project": "Both",
+    "source_files": [
+      "Lucid: Idle.qml + hypridle",
+      "Mandara: crates/mandara-services/src/idle.rs"
+    ],
+    "user_facing_behavior": "Screen dim, automatic session lock, DPMS monitor power-off, and suspend timeouts + Caffeine inhibitor.",
+    "settings_keys": [
+      "Lucid: Prefs.idle* (9 keys)",
+      "Mandara: /idle/* (12 keys)"
+    ],
+    "keybindings": [
+      "IPC caffeine toggle"
+    ],
+    "ipc_dbus_socket": [
+      "org.freedesktop.ScreenSaver / systemd-inhibit"
+    ],
+    "wayland_hyprland_hooks": [
+      "ext_idle_notifier_v1, zwlr_output_power_management_v1"
+    ],
+    "visual_presentation": "Bar Caffeine pill",
+    "dependencies": [
+      "Wayland compositor"
+    ],
+    "conflicts_risks": "Dual idle daemons firing competing lock/DPMS timers.",
+    "classification": "Class F (Exclusive Timer Orchestrator)",
+    "scy_shell_target_design": "Single active Idle Coordinator invoking the active Lock provider."
+  },
+  {
+    "feature_id": "F-06",
+    "feature_name": "Hyprland Configuration, Rules, Monitors & Keybind Generation",
+    "category": "Compositor Configuration",
+    "source_project": "Both",
+    "source_files": [
+      "Lucid: HyprConfig.qml + support/hypr/modules/*.lua",
+      "Mandara: crates/mandara-compositor/src/hyprland.rs, keybinds.rs"
+    ],
+    "user_facing_behavior": "Live GUI editing of gaps, borders, blur, animations, input, monitors, window rules, layer rules, and keybindings.",
+    "settings_keys": [
+      "Lucid: 72 HyprConfig keys + 61 keybinds",
+      "Mandara: /compositor/* + /displays/*"
+    ],
+    "keybindings": [
+      "All shell & WM keybinds"
+    ],
+    "ipc_dbus_socket": [
+      "Hyprland .socket.sock & .socket2.sock"
+    ],
+    "wayland_hyprland_hooks": [
+      "~/.config/hypr/scy-shell/ modular includes"
+    ],
+    "visual_presentation": "Unified Scy-Shell Studio -> Hyprland & Displays & Keybinds",
+    "dependencies": [
+      "hyprland (0.55+ Lua or .conf fallback)"
+    ],
+    "conflicts_risks": "CRITICAL: Direct dual writes would clobber each other.",
+    "classification": "Class F + Class E (Unified Scy-Shell Hyprland Coordinator)",
+    "scy_shell_target_design": "ONE authoritative Scy-Shell Hyprland Coordinator (`scy-hypr`) with timestamped backups, version-validated directives, and instant rollback."
+  },
+  {
+    "feature_id": "E-01",
+    "feature_name": "Scy-Shell Unified Core Daemon, State Bus & Provider Arbitrator (`scy-daemon`)",
+    "category": "Scy-Shell Native Core",
+    "source_project": "Neither (Scy-Shell Native)",
+    "source_files": [
+      "scy-shell/crates/scy-daemon/, scy-ipc/, scy-schema/"
+    ],
+    "user_facing_behavior": "Single source of truth for active providers, active presentations, pre-activation conflict detection, cross-engine event synchronization, lazy/dormant process lifecycle, and atomic config transactions.",
+    "settings_keys": [
+      "scy.active_providers.*, scy.presentations.*, scy.profiles.*"
+    ],
+    "keybindings": [],
+    "ipc_dbus_socket": [
+      "$XDG_RUNTIME_DIR/scy-shell.sock + org.scyshell.Daemon"
+    ],
+    "wayland_hyprland_hooks": [],
+    "visual_presentation": "Headless high-efficiency Rust coordinator (<8 MB RSS target)",
+    "dependencies": [
+      "Rust std + Unix domain sockets"
+    ],
+    "conflicts_risks": "Eliminates all 11 exclusive-resource conflicts by design.",
+    "classification": "Class E (Scy-Shell Native Required)",
+    "scy_shell_target_design": "Built in Rust inside `scy-shell/crates/scy-daemon`, bridged to Lucid via `ScyBridge.qml` and to Mandara via `scy_adapter.rs`."
+  },
+  {
+    "feature_id": "E-02",
+    "feature_name": "Unified Scy-Shell Studio (Material 3 Expressive Central Settings & Conflict UI)",
+    "category": "Scy-Shell Native Studio",
+    "source_project": "Neither (Scy-Shell Native)",
+    "source_files": [
+      "scy-shell/studio/"
+    ],
+    "user_facing_behavior": "One cohesive Material 3 Expressive Settings & Customization Studio exposing ALL 643 Lucid settings + ALL 1,232 Mandara settings (1,875 total), per-feature Provider & Presentation pickers, Inactive-Provider drawers, Live Conflict Inspector, Resource Monitor, and Comprehensive Hyprland Configurator.",
+    "settings_keys": [
+      "All 1,875 union settings"
+    ],
+    "keybindings": [
+      "Super+Comma (`Super+,`) / Super+I"
+    ],
+    "ipc_dbus_socket": [
+      "scy-shell studio"
+    ],
+    "wayland_hyprland_hooks": [
+      "Standard Wayland window"
+    ],
+    "visual_presentation": "Material 3 Expressive (Google Sans, HCT dynamic palette, Jelly springs, expressive shapes)",
+    "dependencies": [
+      "quickshell + scy-daemon"
+    ],
+    "conflicts_risks": "Lazy-render sections so 1,875 settings open in <120ms.",
+    "classification": "Class E (Scy-Shell Native Required)",
+    "scy_shell_target_design": "Built natively in QML on Lucid's M3 Expressive component kit with schema-driven rendering for all `04-settings-catalogue.json` entries."
+  },
+  {
+    "feature_id": "E-03",
+    "feature_name": "Pre-Activation External & Internal Conflict Detector (`scy-shell conflicts`)",
+    "category": "Scy-Shell Native Safety",
+    "source_project": "Neither (Scy-Shell Native)",
+    "source_files": [
+      "scy-shell/crates/scy-conflicts/"
+    ],
+    "user_facing_behavior": "Detects running external daemons (`mako`, `dunst`, `swaync`, `waybar`, `ags`, `hyprpaper`, `swww`, `lxqt-policykit`, `hypridle`, `swayidle`, duplicate `wl-paste`) AND internal Lucid/Mandara collisions BEFORE enabling a feature.",
+    "settings_keys": [
+      "scy.safety.conflict_policy"
+    ],
+    "keybindings": [],
+    "ipc_dbus_socket": [
+      "D-Bus ListNames/GetNameOwner + /proc + Hyprland layers"
+    ],
+    "wayland_hyprland_hooks": [
+      "hyprctl layers -j"
+    ],
+    "visual_presentation": "Interactive Conflict Resolution Banner & Modal in Scy-Shell Studio",
+    "dependencies": [
+      "scy-daemon"
+    ],
+    "conflicts_risks": "Prevents silent D-Bus/Wayland crashes.",
+    "classification": "Class E (Scy-Shell Native Required)",
+    "scy_shell_target_design": "Mandatory pre-flight check before every provider switch or session startup."
+  }
+]

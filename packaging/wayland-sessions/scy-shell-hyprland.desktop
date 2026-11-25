@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Hyprland (Scy-Shell)
+Comment=Unified Material 3 Expressive & Rust GPUI Desktop Shell on Hyprland
+Exec=Hyprland
+Type=Application
+DesktopNames=Hyprland;scy-shell

@@ -1,0 +1,46 @@
+{
+  "project": "Scy-Shell",
+  "stage": "Stage 0 — Source Acquisition and Complete Audit",
+  "audit_date": "2026-11-24",
+  "combined_license": "GPL-3.0-or-later (with preserved MIT notices for Lucid components and OFL/Apache-2.0/CC0 notices for third-party assets)",
+  "upstreams": {
+    "lucid": {
+      "name": "Lucid 2",
+      "remote_url": "https://github.com/Sn3akyy1/lucid",
+      "branch": "main",
+      "pinned_tag": "v1.21.1",
+      "pinned_commit": "15f13429bc59b4a97223bcfe5592735cb1eb92be",
+      "tree_hash": "d55873f3df7c0a50765e39b869a956a57a7adc48",
+      "commit_date": "2026-11-22 12:26:02 +0100",
+      "submodules": [],
+      "git_lfs": false,
+      "license": "MIT",
+      "copyright": "Copyright (c) 2026 Sn3akyy1",
+      "working_branch": "scy-working",
+      "sha256_manifest": "provenance/lucid-v1.21.1-sha256sums.txt",
+      "tracked_files": 920,
+      "bundled_engine_dir": "engines/lucid",
+      "adapter_patch": "adapters/lucid/lucid-scy-adapter.patch"
+    },
+    "mandara": {
+      "name": "Mandara Shell",
+      "remote_url": "https://github.com/theHamdiz/mandara",
+      "branch": "main",
+      "latest_release_tag": "v0.38.2",
+      "release_tag_commit": "f66e1303aba62cd1108d2c8aa1f9c6e2bc9dfb6d",
+      "pinned_commit": "8a50e16af3a59cd8745df36e5656d825e5284641",
+      "pinned_commit_note": "HEAD is v0.38.2 + 1 AUR PKGBUILD checksum commit (8a50e16a); all 16 Rust crates are byte-identical to tag v0.38.2 (f66e1303)",
+      "tree_hash": "c88b204cbf7cdb90452e60419a9215a5b83145b4",
+      "commit_date": "2026-11-23 14:56:06 +0000",
+      "submodules": [],
+      "git_lfs": false,
+      "license": "GPL-3.0-or-later",
+      "copyright": "Copyright (C) 2026 Ahmad Hamdi (theHamdiz) and contributors",
+      "working_branch": "scy-working",
+      "sha256_manifest": "provenance/mandara-v0.38.2-sha256sums.txt",
+      "tracked_files": 2788,
+      "bundled_engine_dir": "engines/mandara",
+      "adapter_patch": "adapters/mandara/mandara-scy-adapter.patch"
+    }
+  }
+}

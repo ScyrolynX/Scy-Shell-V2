@@ -1,0 +1,505 @@
+#!/usr/bin/env python3
+"""Scy-Shell v2.0.0 — Ultimate Unified Desktop Shell Command-Line Controller."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from scy_core.config_store import ScyConfigStore
+from scy_core.conflicts import ScyConflictScanner
+from scy_core.doctor import ScyDoctor
+from scy_core.federation import ScyFederationEngine
+from scy_core.hypr_coordinator import ScyHyprCoordinator
+from scy_core.layout_and_lab import ScyComponentLab, ScyLayoutComposer
+from scy_core.native_services import (
+    ScyControlCenterBackend,
+    ScyDockController,
+    ScyPerformanceAdvisor,
+    ScyProductivityEngine,
+)
+from scy_core.process_guard import ProcessSupervisor
+from scy_core.profiles import ScyProfileManager
+from scy_core.provenance import ScyProvenanceVerifier
+from scy_core.security_preauth import ScyPreAuthCoordinator
+from scy_core.theme_engine import ScyThemeCoordinator
+
+
+def _parse_val(raw: str) -> Any:
+    low = raw.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    if (raw.startswith("[") and raw.endswith("]")) or (raw.startswith("{") and raw.endswith("}")):
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+    return raw
+
+
+def _notify_live_dock_reconcile() -> None:
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        return
+    for cmd in (["qs", "ipc", "call", "dock", "reload"], ["mandara", "msg", "config", "reload"]):
+        if shutil.which(cmd[0]):
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2, check=False)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="scy-shell",
+        description="Scy-Shell v2.0.0 — Unified Desktop Shell Controller (CachyOS / Hyprland 0.57+ / Quickshell)",
+    )
+    ap.add_argument("--home", type=Path, default=None, help="Override HOME directory")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("status", help="Show active shell status, 15 Studio section counts, and single-owner state")
+    sub.add_parser("provenance", help="Verify upstream SHA-256 baseline & reversible adapter patches")
+
+    doc_p = sub.add_parser("doctor", help="Run comprehensive CachyOS/Hyprland 0.57+/Quickshell diagnostics")
+    doc_p.add_argument("--json", action="store_true")
+
+    conf_p = sub.add_parser("conflicts", help="Scan exclusive D-Bus/Wayland/process conflicts")
+    conf_p.add_argument("--json", action="store_true")
+    conf_p.add_argument("--resync", action="store_true")
+
+    prov_p = sub.add_parser("provider", help="Get or set active owner for a runtime domain (e.g. dock, bar, lock_screen)")
+    prov_p.add_argument("domain", nargs="?")
+    prov_p.add_argument("target", nargs="?")
+
+    pres_p = sub.add_parser("presentation", help="Set visual presentation preset (e.g. primary_identity, toasts)")
+    pres_p.add_argument("slot")
+    pres_p.add_argument("value")
+
+    cfg_p = sub.add_parser("config", help="Read, write, reset, or search all 2,026 unified Scy-Shell settings")
+    cfg_p.add_argument("action", choices=["get", "set", "set-json", "reset", "reset-section", "search", "get-all", "sections"])
+    cfg_p.add_argument("key", nargs="?", default="")
+    cfg_p.add_argument("value", nargs="?")
+    cfg_p.add_argument("--section", default=None, help="Filter search to one of the 15 Studio sections")
+
+    dock_p = sub.add_parser("dock", help="Single-owner Dock Studio controller (switch, pin, unpin, separator, status)")
+    dock_p.add_argument("action", choices=["status", "switch", "pin", "unpin", "separator", "record-launch"], default="status", nargs="?")
+    dock_p.add_argument("target", nargs="?", default="")
+    dock_p.add_argument("--label", default=None)
+    dock_p.add_argument("--group", default=None)
+
+    prof_p = sub.add_parser("profile", help="Manage complete desktop profiles (Balanced, Minimal, Productivity, Immersive, Gaming, Creative, Cinema + Custom)")
+    prof_p.add_argument("action", choices=["list", "apply", "create", "duplicate", "export", "import", "delete"], default="list", nargs="?")
+    prof_p.add_argument("id", nargs="?", default="")
+    prof_p.add_argument("extra", nargs="?", default="")
+    prof_p.add_argument("--name", default="")
+    prof_p.add_argument("--description", default="")
+
+    lay_p = sub.add_parser("layout", help="Scy Layout Composer presets & surface placement")
+    lay_p.add_argument("action", choices=["list", "get", "apply", "update-surface"], default="list", nargs="?")
+    lay_p.add_argument("target", nargs="?", default="")
+    lay_p.add_argument("--patch", default="{}")
+    lay_p.add_argument("--save-as", default=None)
+
+    comp_p = sub.add_parser("component", help="Scy Component Laboratory per-component customizer")
+    comp_p.add_argument("action", choices=["list", "update", "reset"], default="list", nargs="?")
+    comp_p.add_argument("id", nargs="?", default="")
+    comp_p.add_argument("--patch", default="{}")
+
+    perf_p = sub.add_parser("performance", help="Scy Intelligent Performance hardware probe & tier controller")
+    perf_p.add_argument("action", choices=["probe", "apply"], default="probe", nargs="?")
+    perf_p.add_argument("tier", nargs="?", default="")
+
+    prev_p = sub.add_parser("preview", help="Scy Live Preview transactional staging (stage, diff, commit, revert)")
+    prev_p.add_argument("action", choices=["stage", "diff", "commit", "revert"])
+    prev_p.add_argument("--changes", default="{}")
+
+    prod_p = sub.add_parser("productivity", help="Scy Productivity Layer (calculator, unit converter, notes, focus timer)")
+    prod_p.add_argument("action", choices=["eval", "notes", "note-add", "note-del", "timer", "timer-start", "timer-stop", "control-center"])
+    prod_p.add_argument("arg", nargs="?", default="")
+
+    stu_p = sub.add_parser("studio", help="Open unified 15-section Scy-Shell Studio")
+    stu_p.add_argument("section", nargs="?", default="01-personalization")
+
+    thm_p = sub.add_parser("theme", help="Generate & sync M3 Expressive + OKLCH palettes and 28-app ledger")
+    thm_p.add_argument("action", choices=["apply", "adopt-modified"], default="apply", nargs="?")
+    thm_p.add_argument("--seed", default=None)
+
+    wg_p = sub.add_parser("wallgen", help="Generate procedural wallpaper (13 styles) & apply to active engine")
+    wg_p.add_argument("style", nargs="?", default="aurora")
+    wg_p.add_argument("--seed", default=None)
+
+    pl_p = sub.add_parser("plugins", help="Search all 89 built-in & WASM desktop plugins")
+    pl_p.add_argument("query", nargs="?", default="")
+
+    ai_p = sub.add_parser("ai", help="Run deterministic / local-LLM natural language shell command")
+    ai_p.add_argument("prompt", nargs="+")
+
+    hy_p = sub.add_parser("hypr", help="Manage modular Hyprland 0.57+ Lua / .conf configs & 15s safety trials")
+    hy_p.add_argument("action", choices=["emit", "keybinds", "trial-confirm", "trial-revert", "dedup-autostart"])
+    hy_p.add_argument("--full", action="store_true")
+
+    pa_p = sub.add_parser("preauth", help="Manage strictly separated Lock (11) & Login (12) configurations")
+    pa_p.add_argument("action", choices=["stage", "copy-lock-to-login-once"], default="stage", nargs="?")
+
+    bk_p = sub.add_parser("backup", help="Create, list, or restore timestamped configuration snapshots")
+    bk_p.add_argument("action", choices=["create", "list", "restore"])
+    bk_p.add_argument("target", nargs="?", default=None)
+
+    st_p = sub.add_parser("start", help="Launch Scy-Shell single-instance session")
+    st_p.add_argument("--dry-run", action="store_true")
+
+    args = ap.parse_args()
+    is_restore = args.cmd == "backup" and args.action == "restore"
+    store = ScyConfigStore(home_dir=args.home, skip_init_load=is_restore)
+
+    if args.cmd == "provenance":
+        rep = ScyProvenanceVerifier().verify_all()
+        print(json.dumps(rep, indent=2))
+        return 0 if rep["ok"] else 1
+
+    if args.cmd == "status":
+        sections_summary = [
+            {"id": s["id"], "number": s.get("number") or s.get("num"), "title": s["title"], "count": len(store.schema.by_section(s["id"]))}
+            for s in store.schema.studio_sections
+        ]
+        print(json.dumps({
+            "version": "2.0.0",
+            "schema_version": store.doc.get("schema_version", 2),
+            "settings_total": store.schema.total_count,
+            "engine_settings_total": store.schema.engine_total_count,
+            "scy_native_settings_total": store.schema.scy_native_count,
+            "studio_sections": sections_summary,
+            "active_profile": store.get_setting("scy.profiles.active"),
+            "performance_tier": store.get_setting("scy.performance.tier"),
+            "dock_owner": store.doc["active_providers"].get("dock"),
+            "dock_enabled": bool(store.get_setting("scy.providers.lucid.prefs.dockEnabled")),
+            "lock_login_decoupled": not bool(store.get_setting("scy.providers.lucid.prefs.lockLoginSync")),
+            "active_providers": store.doc["active_providers"],
+            "presentations": store.doc["presentations"],
+        }, indent=2))
+        return 0
+
+    if args.cmd == "doctor":
+        doc = ScyDoctor(store)
+        rep = doc.run()
+        print(json.dumps(rep, indent=2) if args.json else doc.format_human(rep))
+        return 0
+
+    if args.cmd == "conflicts":
+        if args.resync:
+            store.flush_all()
+        rep = ScyConflictScanner(store).to_json_report()
+        print(json.dumps(rep, indent=2) if args.json else f"Conflicts: {rep['conflict_count']} (Critical: {rep['critical_count']})")
+        return 0
+
+    if args.cmd == "provider":
+        if not args.domain:
+            print(json.dumps(store.doc["active_providers"], indent=2))
+            return 0
+        if not args.target:
+            print(store.doc["active_providers"].get(args.domain, ""))
+            return 0
+        ok, msg = store.set_provider(args.domain, args.target)
+        if not ok:
+            print(f"ERROR: {msg}", file=sys.stderr)
+            return 1
+        if args.domain == "dock":
+            _notify_live_dock_reconcile()
+        ScyPreAuthCoordinator(store).stage_display_manager_configs()
+        print(f"Updated provider: {args.domain} -> {args.target}")
+        return 0
+
+    if args.cmd == "presentation":
+        ok, msg = store.set_presentation(args.slot, args.value)
+        if not ok:
+            print(f"ERROR: {msg}", file=sys.stderr)
+            return 1
+        print(f"Updated presentation: {args.slot} -> {args.value}")
+        return 0
+
+    if args.cmd == "config":
+        if args.action == "sections":
+            print(json.dumps([
+                {**s, "count": len(store.schema.by_section(s["id"]))}
+                for s in store.schema.studio_sections
+            ], indent=2))
+            return 0
+        if args.action == "get-all":
+            print(json.dumps(store.get_all_values()))
+            return 0
+        if args.action == "get":
+            print(json.dumps(store.get_setting(args.key)))
+            return 0
+        if args.action == "reset":
+            store.reset_setting(args.key)
+            print(json.dumps({"ok": True, "scy_id": args.key, "value": store.get_setting(args.key)}))
+            return 0
+        if args.action == "reset-section":
+            res = store.reset_section(args.key)
+            print(json.dumps(res, indent=2))
+            return 0
+        if args.action in ("set", "set-json"):
+            if args.value is None:
+                raise SystemExit(f"Value required for 'config {args.action}'")
+            parsed_v = json.loads(args.value) if args.action == "set-json" else _parse_val(args.value)
+            meta = store.set_setting(args.key, parsed_v, validate=True)
+            if args.key in ("scy.dock.engine", "scy.providers.lucid.prefs.dockEnabled"):
+                _notify_live_dock_reconcile()
+            if args.key.startswith("scy.login."):
+                ScyPreAuthCoordinator(store).stage_display_manager_configs()
+            if meta.live_preview == "mandara_ipc" and os.environ.get("WAYLAND_DISPLAY") and shutil.which("mandara"):
+                subprocess.run(
+                    ["mandara", "msg", "config", "set", meta.original_key, json.dumps(store.get_setting(args.key))],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            print(json.dumps({"ok": True, "scy_id": args.key, "value": store.get_setting(args.key)}))
+            return 0
+        if args.action == "search":
+            matches = store.schema.search(args.key, section=args.section, limit=80)
+            hits = [
+                {
+                    "scy_id": m.scy_id,
+                    "studio_section": m.studio_section,
+                    "project": m.source_project,
+                    "key": m.original_key,
+                    "label": m.label,
+                    "ui_widget": m.ui_widget,
+                    "type": m.concrete_type,
+                    "min": m.min_val,
+                    "max": m.max_val,
+                    "unit": m.unit,
+                }
+                for m in matches
+            ]
+            print(json.dumps(hits, indent=2))
+            return 0
+
+    if args.cmd == "dock":
+        dc = ScyDockController(store)
+        if args.action == "status":
+            print(json.dumps(dc.status(), indent=2))
+        elif args.action == "switch":
+            res = dc.switch_engine(args.target)
+            _notify_live_dock_reconcile()
+            print(json.dumps(res, indent=2))
+        elif args.action == "pin":
+            print(json.dumps(dc.pin_app(args.target, label=args.label, group=args.group), indent=2))
+        elif args.action == "unpin":
+            print(json.dumps(dc.unpin_item(args.target), indent=2))
+        elif args.action == "separator":
+            print(json.dumps(dc.add_separator(args.target or None), indent=2))
+        elif args.action == "record-launch":
+            print(json.dumps(dc.record_launch(args.target), indent=2))
+        return 0
+
+    if args.cmd == "profile":
+        pm = ScyProfileManager(store)
+        if args.action == "list":
+            print(json.dumps(pm.list_profiles(), indent=2))
+        elif args.action == "apply":
+            res = pm.apply_profile(args.id)
+            _notify_live_dock_reconcile()
+            print(json.dumps(res, indent=2))
+        elif args.action == "create":
+            print(json.dumps(pm.create_profile_from_current(args.id, args.name or args.id, args.description), indent=2))
+        elif args.action == "duplicate":
+            print(json.dumps(pm.duplicate_profile(args.id, args.extra, args.name or None), indent=2))
+        elif args.action == "export":
+            out = pm.export_profile(args.id, Path(args.extra))
+            print(json.dumps({"ok": True, "exported_to": str(out)}, indent=2))
+        elif args.action == "import":
+            print(json.dumps(pm.import_profile(Path(args.id), args.extra or None), indent=2))
+        elif args.action == "delete":
+            print(json.dumps({"ok": pm.delete_profile(args.id)}, indent=2))
+        return 0
+
+    if args.cmd == "layout":
+        lc = ScyLayoutComposer(store)
+        if args.action == "list":
+            print(json.dumps(lc.list_layouts(), indent=2))
+        elif args.action == "get":
+            print(json.dumps(lc.get_active_layout(), indent=2))
+        elif args.action == "apply":
+            print(json.dumps(lc.apply_layout(args.target), indent=2))
+        elif args.action == "update-surface":
+            print(json.dumps(lc.update_surface(args.target, json.loads(args.patch), args.save_as), indent=2))
+        return 0
+
+    if args.cmd == "component":
+        cl = ScyComponentLab(store)
+        if args.action == "list":
+            print(json.dumps(cl.list_components(), indent=2))
+        elif args.action == "update":
+            print(json.dumps(cl.update_component(args.id, json.loads(args.patch)), indent=2))
+        elif args.action == "reset":
+            print(json.dumps(cl.reset_component(args.id), indent=2))
+        return 0
+
+    if args.cmd == "performance":
+        pa = ScyPerformanceAdvisor(store)
+        if args.action == "probe":
+            print(json.dumps(pa.probe_hardware(), indent=2))
+        elif args.action == "apply":
+            print(json.dumps(pa.apply_tier(args.tier), indent=2))
+        return 0
+
+    if args.cmd == "preview":
+        if args.action == "stage":
+            print(json.dumps(store.stage_preview(json.loads(args.changes)), indent=2))
+        elif args.action == "diff":
+            print(json.dumps(store.get_preview_diff(), indent=2))
+        elif args.action == "commit":
+            print(json.dumps(store.commit_preview(), indent=2))
+        elif args.action == "revert":
+            print(json.dumps(store.revert_preview(), indent=2))
+        return 0
+
+    if args.cmd == "productivity":
+        pe = ScyProductivityEngine(store)
+        if args.action == "eval":
+            print(json.dumps(pe.evaluate_query(args.arg), indent=2))
+        elif args.action == "notes":
+            print(json.dumps(pe.list_notes(), indent=2))
+        elif args.action == "note-add":
+            print(json.dumps(pe.add_note(args.arg), indent=2))
+        elif args.action == "note-del":
+            print(json.dumps({"ok": pe.delete_note(args.arg)}, indent=2))
+        elif args.action == "timer":
+            print(json.dumps(pe.timer_status(), indent=2))
+        elif args.action == "timer-start":
+            mins = int(args.arg) if args.arg else None
+            print(json.dumps(pe.start_timer(mins), indent=2))
+        elif args.action == "timer-stop":
+            print(json.dumps(pe.stop_timer(), indent=2))
+        elif args.action == "control-center":
+            print(json.dumps(ScyControlCenterBackend(store).snapshot(), indent=2))
+        return 0
+
+    if args.cmd == "studio":
+        if os.environ.get("WAYLAND_DISPLAY") and shutil.which("qs"):
+            subprocess.run(["qs", "ipc", "call", "settings", "show", args.section], check=False)
+        else:
+            print(json.dumps({"studio_section": args.section, "wayland_live": False}, indent=2))
+        return 0
+
+    if args.cmd == "theme":
+        seed = args.seed or str(store.doc["providers"]["lucid"]["prefs"].get("themeColour", "#7AA2F7"))
+        thm = ScyThemeCoordinator(store)
+        thm.write_mandara_portable_m3_look()
+        res = thm.apply_palette(seed_hex=seed, adopt_modified=(args.action == "adopt-modified"))
+        print(json.dumps(res, indent=2))
+        return 0
+
+    if args.cmd == "wallgen":
+        seed = args.seed or str(store.doc["providers"]["lucid"]["prefs"].get("themeColour", "#7AA2F7"))
+        res = ScyFederationEngine(store).generate_procedural_wallpaper(style=args.style, seed_hex=seed)
+        print(json.dumps(res, indent=2))
+        return 0
+
+    if args.cmd == "plugins":
+        items = ScyFederationEngine(store).query_plugins(args.query)
+        print(json.dumps({"count": len(items), "items": items}, indent=2))
+        return 0
+
+    if args.cmd == "ai":
+        res = ScyFederationEngine(store).interpret_ai_command(" ".join(args.prompt), apply_immediately=True)
+        print(json.dumps(res, indent=2))
+        return 0
+
+    if args.cmd == "hypr":
+        hy = ScyHyprCoordinator(store)
+        if args.action == "emit":
+            print(json.dumps(hy.emit_modular_configs(), indent=2))
+        elif args.action == "dedup-autostart":
+            print(json.dumps(ProcessSupervisor().deduplicate_hyprland_autostart(hy.hypr_dir), indent=2))
+        elif args.action == "keybinds":
+            ledger = hy.build_complete_shortcut_ledger()
+            if args.full:
+                print(json.dumps(ledger, indent=2))
+            else:
+                print(json.dumps({
+                    "counts": ledger["counts"],
+                    "compositor_collisions": ledger["compositor_collisions"],
+                    "desktop_icons_intra_clashes": ledger["desktop_icons_intra_clashes"],
+                    "cross_scope_compositor_overlaps": ledger["cross_scope_compositor_overlaps"],
+                }, indent=2))
+        elif args.action == "trial-confirm":
+            print(json.dumps(hy.confirm_trial(), indent=2))
+        elif args.action == "trial-revert":
+            print(json.dumps(hy.revert_trial(), indent=2))
+        return 0
+
+    if args.cmd == "preauth":
+        pa = ScyPreAuthCoordinator(store)
+        if args.action == "copy-lock-to-login-once":
+            print(json.dumps(pa.copy_visual_tokens_lock_to_login_once(), indent=2))
+        else:
+            paths = pa.stage_display_manager_configs()
+            print(json.dumps({k: str(v) for k, v in paths.items()}, indent=2))
+        return 0
+
+    if args.cmd == "backup":
+        if args.action == "create":
+            b = store.create_backup(tag=args.target or "manual")
+            print(str(b))
+            return 0
+        if args.action == "restore":
+            if not args.target or not str(args.target).strip():
+                print("ERROR: 'backup restore' requires a backup directory path or snapshot name.", file=sys.stderr)
+                return 1
+            try:
+                resolved_dir = store.resolve_backup_dir(args.target)
+                restored_files = store.restore_backup(resolved_dir)
+            except Exception as exc:
+                print(f"ERROR: Backup restore failed: {exc}", file=sys.stderr)
+                return 1
+            print(json.dumps({
+                "ok": True,
+                "backup_dir": str(resolved_dir),
+                "restored_count": len(restored_files),
+                "restored_files": restored_files,
+            }, indent=2))
+            return 0
+        broot = store.backup_root
+        items = sorted([p.name for p in broot.iterdir() if p.is_dir()]) if broot.exists() else []
+        print(json.dumps(items, indent=2))
+        return 0
+
+    if args.cmd == "start":
+        sup_report = ProcessSupervisor().enforce_single_shell_instances(dry_run=args.dry_run)
+        plan = [
+            f"{ROOT / 'bin' / 'scy-daemon'}  # SingleInstanceLock + SHA-256 live reconciliation",
+            "quickshell -p ~/.config/quickshell/lucid  # Single-owner gated surfaces + ScyDesignTokens",
+            "mandara  # Single-owner gated surfaces (dock/bar/osd/notifs gated via scy_gates)",
+        ]
+        if args.dry_run or not os.environ.get("WAYLAND_DISPLAY"):
+            print(json.dumps({
+                "version": "2.0.0",
+                "session_plan": plan,
+                "process_supervisor": sup_report,
+                "wayland_live": bool(os.environ.get("WAYLAND_DISPLAY")),
+            }, indent=2))
+            return 0
+        subprocess.Popen([str(ROOT / "bin" / "scy-daemon")])
+        return 0
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

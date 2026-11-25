@@ -1,0 +1,510 @@
+{
+  "summary": {
+    "lucid_compositor_binds": 61,
+    "mandara_unique_added_binds": 6,
+    "unified_compositor_binds_total": 67,
+    "lucid_desktop_icons_stage0_grouped": 17,
+    "lucid_desktop_icons_qml_key_actions_total": 22,
+    "lucid_desktop_icons_qml_default_bound": 19,
+    "lucid_desktop_icons_qml_user_bindable_unbound": 3,
+    "lucid_icon_board_navigation_handlers": 6,
+    "mandara_default_keybinds_total": 25
+  },
+  "stage0_17_desktop_icons_shortcuts": [
+    {
+      "index": 1,
+      "chord": "Return",
+      "action": "Open selection",
+      "source": "DesktopIcons.keyActions['open']"
+    },
+    {
+      "index": 2,
+      "chord": "space",
+      "action": "Quick Look in Lens",
+      "source": "DesktopIcons.keyActions['look']"
+    },
+    {
+      "index": 3,
+      "chord": "F2",
+      "action": "Rename inline",
+      "source": "DesktopIcons.keyActions['rename']"
+    },
+    {
+      "index": 4,
+      "chord": "Delete",
+      "action": "Move to Trash",
+      "source": "DesktopIcons.keyActions['trash']"
+    },
+    {
+      "index": 5,
+      "chord": "SHIFT + Delete",
+      "action": "Delete Permanently",
+      "source": "DesktopIcons.keyActions['delete']"
+    },
+    {
+      "index": 6,
+      "chord": "CTRL + C",
+      "action": "Copy files (+ CTRL+SHIFT+C copyPath)",
+      "source": "DesktopIcons.keyActions['copy', 'copyPath']"
+    },
+    {
+      "index": 7,
+      "chord": "CTRL + X",
+      "action": "Cut files",
+      "source": "DesktopIcons.keyActions['cut']"
+    },
+    {
+      "index": 8,
+      "chord": "CTRL + V",
+      "action": "Paste files",
+      "source": "DesktopIcons.keyActions['paste']"
+    },
+    {
+      "index": 9,
+      "chord": "CTRL + D",
+      "action": "Duplicate selection",
+      "source": "DesktopIcons.keyActions['duplicate']"
+    },
+    {
+      "index": 10,
+      "chord": "CTRL + A",
+      "action": "Select All (+ CTRL+I invert)",
+      "source": "DesktopIcons.keyActions['selectAll', 'invert']"
+    },
+    {
+      "index": 11,
+      "chord": "CTRL + SHIFT + N",
+      "action": "New Folder (+ CTRL+ALT+N newText)",
+      "source": "DesktopIcons.keyActions['newFolder', 'newText']"
+    },
+    {
+      "index": 12,
+      "chord": "CTRL + Z",
+      "action": "Undo file operation",
+      "source": "DesktopIcons.keyActions['undo']"
+    },
+    {
+      "index": 13,
+      "chord": "Menu / SHIFT + F10",
+      "action": "Open Desktop Context Menu",
+      "source": "IconBoard.qml / DesktopMenu.qml"
+    },
+    {
+      "index": 14,
+      "chord": "Arrow Keys (Left/Right/Up/Down)",
+      "action": "Grid & Quick-Look navigation",
+      "source": "IconBoard.qml::handleKey"
+    },
+    {
+      "index": 15,
+      "chord": "SHIFT + Arrow Keys",
+      "action": "Contiguous range selection",
+      "source": "IconBoard.qml::handleKey"
+    },
+    {
+      "index": 16,
+      "chord": "Home / End",
+      "action": "Jump to first / last icon cell",
+      "source": "IconBoard.qml::handleKey"
+    },
+    {
+      "index": 17,
+      "chord": "Escape",
+      "action": "Close Info/Quick-Look/Edit or clear selection (+ ALT+Return info, CTRL+ALT+T terminal, CTRL+H hidden, F5 refresh)",
+      "source": "Desktop.qml:348 & IconBoard.qml:117"
+    }
+  ],
+  "desktop_icons_qml_key_actions": [
+    {
+      "id": "open",
+      "label": "Open",
+      "default_keys": "Return",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "look",
+      "label": "Quick Look",
+      "default_keys": "space",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "info",
+      "label": "Get Info",
+      "default_keys": "ALT + Return",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "rename",
+      "label": "Rename",
+      "default_keys": "F2",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "cut",
+      "label": "Cut",
+      "default_keys": "CTRL + X",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "copy",
+      "label": "Copy",
+      "default_keys": "CTRL + C",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "paste",
+      "label": "Paste",
+      "default_keys": "CTRL + V",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "copyPath",
+      "label": "Copy Path",
+      "default_keys": "CTRL + SHIFT + C",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "duplicate",
+      "label": "Duplicate",
+      "default_keys": "CTRL + D",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "trash",
+      "label": "Move to Trash",
+      "default_keys": "Delete",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "delete",
+      "label": "Delete for Good",
+      "default_keys": "SHIFT + Delete",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "undo",
+      "label": "Undo",
+      "default_keys": "CTRL + Z",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "selectAll",
+      "label": "Select All",
+      "default_keys": "CTRL + A",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "invert",
+      "label": "Invert Selection",
+      "default_keys": "CTRL + I",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "newFolder",
+      "label": "New Folder",
+      "default_keys": "CTRL + SHIFT + N",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "newText",
+      "label": "New Text Document",
+      "default_keys": "CTRL + ALT + N",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "compress",
+      "label": "Compress",
+      "default_keys": "",
+      "default_bound": false,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "terminal",
+      "label": "Open in Terminal",
+      "default_keys": "CTRL + ALT + T",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "hidden",
+      "label": "Show Hidden Files",
+      "default_keys": "CTRL + H",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "arrange",
+      "label": "Arrange Icons",
+      "default_keys": "",
+      "default_bound": false,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "refresh",
+      "label": "Refresh",
+      "default_keys": "F5",
+      "default_bound": true,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    },
+    {
+      "id": "hideIcons",
+      "label": "Hide Icons",
+      "default_keys": "",
+      "default_bound": false,
+      "scope": "DesktopIcons.qml (canvas-focus-only, remappable via Prefs.desktopKeys)",
+      "scy_override_setting": "scy.providers.lucid.prefs.desktopKeys"
+    }
+  ],
+  "icon_board_navigation_handlers": [
+    {
+      "id": "board-escape",
+      "keys": "Escape",
+      "desc": "Exit Edit mode, close Get Info / Quick Look, or deselect",
+      "source": "luciddesktop/Desktop.qml:348 & IconBoard.qml:117"
+    },
+    {
+      "id": "board-arrows",
+      "keys": "Left / Right / Up / Down",
+      "desc": "Navigate desktop icon cells or step Quick Look preview",
+      "source": "luciddesktop/IconBoard.qml:126"
+    },
+    {
+      "id": "board-shift-arrows",
+      "keys": "SHIFT + Arrows",
+      "desc": "Extend icon selection across grid cells",
+      "source": "luciddesktop/IconBoard.qml:112"
+    },
+    {
+      "id": "board-home-end",
+      "keys": "Home / End",
+      "desc": "Jump to first or last desktop icon",
+      "source": "luciddesktop/IconBoard.qml"
+    },
+    {
+      "id": "board-context-menu",
+      "keys": "Menu / SHIFT + F10",
+      "desc": "Open desktop context menu at focused icon",
+      "source": "luciddesktop/DesktopMenu.qml"
+    },
+    {
+      "id": "board-typeahead",
+      "keys": "Printable characters / space",
+      "desc": "Type-ahead filename jump on desktop grid",
+      "source": "luciddesktop/IconBoard.qml:138"
+    }
+  ],
+  "mandara_25_default_keybinds_accounting": [
+    {
+      "original_chord": "SUPER + space",
+      "mandara_action": "launcher toggle",
+      "resolution_kind": "equivalent_ipc",
+      "unified_bind_id": "launcher",
+      "resolution_note": "SUPER + Super_L (Lucid default) -> scy-shell-ipc launcher toggle"
+    },
+    {
+      "original_chord": "SUPER + ALT + space",
+      "mandara_action": "launcher toggle",
+      "resolution_kind": "equivalent_ipc",
+      "unified_bind_id": "launcher",
+      "resolution_note": "SUPER + Super_L (Lucid default) -> scy-shell-ipc launcher toggle"
+    },
+    {
+      "original_chord": "SUPER + b",
+      "mandara_action": "sidebar toggle",
+      "resolution_kind": "conflict_free_chord",
+      "unified_bind_id": "scy-sidebar",
+      "resolution_note": "SUPER + SHIFT + B (preserves Lucid SUPER + B wallpaper picker)"
+    },
+    {
+      "original_chord": "SUPER + SHIFT + e",
+      "mandara_action": "session menu toggle",
+      "resolution_kind": "equivalent_ipc",
+      "unified_bind_id": "session",
+      "resolution_note": "SUPER + Escape -> scy-shell-ipc power toggle"
+    },
+    {
+      "original_chord": "CTRL + ALT + Delete",
+      "mandara_action": "session menu toggle",
+      "resolution_kind": "equivalent_ipc",
+      "unified_bind_id": "session",
+      "resolution_note": "SUPER + Escape -> scy-shell-ipc power toggle"
+    },
+    {
+      "original_chord": "SUPER + SHIFT + s",
+      "mandara_action": "screenshot region",
+      "resolution_kind": "equivalent_ipc",
+      "unified_bind_id": "snap-region",
+      "resolution_note": "Print / SUPER + D -> scy-shell-ipc shot region (preserves Lucid SUPER+SHIFT+S scratchpad)"
+    },
+    {
+      "original_chord": "SUPER + SHIFT + v",
+      "mandara_action": "panel toggle clipboard",
+      "resolution_kind": "equivalent_ipc",
+      "unified_bind_id": "clipboard",
+      "resolution_note": "SUPER + SHIFT + V -> scy-shell-ipc clipboard toggle"
+    },
+    {
+      "original_chord": "ALT + v",
+      "mandara_action": "panel toggle clipboard",
+      "resolution_kind": "equivalent_ipc",
+      "unified_bind_id": "clipboard",
+      "resolution_note": "SUPER + SHIFT + V -> scy-shell-ipc clipboard toggle"
+    },
+    {
+      "original_chord": "Print",
+      "mandara_action": "screenshot screen",
+      "resolution_kind": "equivalent_ipc",
+      "unified_bind_id": "snap-full",
+      "resolution_note": "SUPER + Print -> scy-shell-ipc shot screen"
+    },
+    {
+      "original_chord": "CTRL + Print",
+      "mandara_action": "screenshot region",
+      "resolution_kind": "equivalent_ipc",
+      "unified_bind_id": "snap-region",
+      "resolution_note": "Print / SUPER + D -> scy-shell-ipc shot region (preserves Lucid SUPER+SHIFT+S scratchpad)"
+    },
+    {
+      "original_chord": "ALT + Print",
+      "mandara_action": "screenshot window",
+      "resolution_kind": "equivalent_ipc",
+      "unified_bind_id": "scy-shot-window",
+      "resolution_note": "scy-shell-ipc shot window"
+    },
+    {
+      "original_chord": "SUPER + SHIFT + t",
+      "mandara_action": "theme mode toggle",
+      "resolution_kind": "conflict_free_chord",
+      "unified_bind_id": "scy-look-switcher",
+      "resolution_note": "SUPER + ALT + T (preserves Lucid SUPER + SHIFT + T OCR!)"
+    },
+    {
+      "original_chord": "CTRL + SHIFT + w",
+      "mandara_action": "wallpaper picker toggle",
+      "resolution_kind": "equivalent_ipc",
+      "unified_bind_id": "wallpaper",
+      "resolution_note": "SUPER + B -> scy-shell-ipc wallpaper picker (+ SUPER + SHIFT + W Wallgen)"
+    },
+    {
+      "original_chord": "ALT + Tab",
+      "mandara_action": "switcher next",
+      "resolution_kind": "equivalent_ipc",
+      "unified_bind_id": "switcher",
+      "resolution_note": "CTRL + ALT + Tab -> scy-shell-ipc switcher next"
+    },
+    {
+      "original_chord": "ALT + SHIFT + Tab",
+      "mandara_action": "switcher prev",
+      "resolution_kind": "equivalent_ipc",
+      "unified_bind_id": "switcher-back",
+      "resolution_note": "CTRL + ALT + SHIFT + Tab -> scy-shell-ipc switcher prev"
+    },
+    {
+      "original_chord": "XF86AudioMute",
+      "mandara_action": "audio mute-all toggle",
+      "resolution_kind": "hardware_single_owner",
+      "unified_bind_id": "xf86-mute",
+      "resolution_note": "XF86AudioMute (single wpctl + active OSD)"
+    },
+    {
+      "original_chord": "XF86AudioRaiseVolume",
+      "mandara_action": "audio volume up",
+      "resolution_kind": "hardware_single_owner",
+      "unified_bind_id": "xf86-vol-up",
+      "resolution_note": "XF86AudioRaiseVolume (single wpctl + active OSD)"
+    },
+    {
+      "original_chord": "XF86AudioLowerVolume",
+      "mandara_action": "audio volume down",
+      "resolution_kind": "hardware_single_owner",
+      "unified_bind_id": "xf86-vol-down",
+      "resolution_note": "XF86AudioLowerVolume (single wpctl + active OSD)"
+    },
+    {
+      "original_chord": "XF86MonBrightnessUp",
+      "mandara_action": "brightness up",
+      "resolution_kind": "hardware_single_owner",
+      "unified_bind_id": "xf86-bright-up",
+      "resolution_note": "XF86MonBrightnessUp (single brightnessctl + active OSD)"
+    },
+    {
+      "original_chord": "XF86MonBrightnessDown",
+      "mandara_action": "brightness down",
+      "resolution_kind": "hardware_single_owner",
+      "unified_bind_id": "xf86-bright-down",
+      "resolution_note": "XF86MonBrightnessDown (single brightnessctl + active OSD)"
+    },
+    {
+      "original_chord": "XF86AudioPlay",
+      "mandara_action": "media play-pause",
+      "resolution_kind": "hardware_single_owner",
+      "unified_bind_id": "xf86-play / xf86-pause",
+      "resolution_note": "XF86AudioPlay / XF86AudioPause"
+    },
+    {
+      "original_chord": "XF86AudioPause",
+      "mandara_action": "media play-pause",
+      "resolution_kind": "hardware_single_owner",
+      "unified_bind_id": "xf86-play / xf86-pause",
+      "resolution_note": "XF86AudioPlay / XF86AudioPause"
+    },
+    {
+      "original_chord": "XF86AudioNext",
+      "mandara_action": "media next",
+      "resolution_kind": "hardware_single_owner",
+      "unified_bind_id": "xf86-next",
+      "resolution_note": "XF86AudioNext"
+    },
+    {
+      "original_chord": "XF86AudioPrev",
+      "mandara_action": "media previous",
+      "resolution_kind": "hardware_single_owner",
+      "unified_bind_id": "xf86-prev",
+      "resolution_note": "XF86AudioPrev"
+    },
+    {
+      "original_chord": "XF86AudioMicMute",
+      "mandara_action": "audio mic mute",
+      "resolution_kind": "hardware_single_owner",
+      "unified_bind_id": "xf86-mic-mute",
+      "resolution_note": "XF86AudioMicMute"
+    }
+  ]
+}

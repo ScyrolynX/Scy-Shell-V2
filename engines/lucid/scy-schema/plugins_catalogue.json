@@ -1,0 +1,714 @@
+[
+  {
+    "id": "2048",
+    "name": "2048",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "active-window",
+    "name": "Active window",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "app-installer",
+    "name": "App installer",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "app-permissions",
+    "name": "App permissions",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "audio",
+    "name": "Audio",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "authenticator",
+    "name": "Authenticator",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "backups",
+    "name": "Backups",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "bluetooth",
+    "name": "Bluetooth",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "boot-look",
+    "name": "Boot look",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "breaks",
+    "name": "Eye breaks",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "ci",
+    "name": "CI status",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "clipboard",
+    "name": "Clipboard",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "clock",
+    "name": "Clock",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "color-picker",
+    "name": "Color picker",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "compositor",
+    "name": "Compositor",
+    "description": "Mandara built-in compositor module (compositor.rs)",
+    "category": "builtin",
+    "kind": "builtin",
+    "capabilities": []
+  },
+  {
+    "id": "containers",
+    "name": "Containers",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "crashes",
+    "name": "Crash reports",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "cursors",
+    "name": "Cursor themes",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-calendar",
+    "name": "Calendar card",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-clocks",
+    "name": "Desktop clocks",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-countdown",
+    "name": "Countdown",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-decorations",
+    "name": "Desktop decorations",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-fun",
+    "name": "Desktop fun",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-identity",
+    "name": "Desktop shortcuts and you",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-info",
+    "name": "Desktop info",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-monitor",
+    "name": "System monitor",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-now-playing",
+    "name": "Now playing card",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-productivity",
+    "name": "Desktop productivity",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-sky",
+    "name": "Desktop sky",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-visualizers",
+    "name": "Desktop visualizers",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-weather",
+    "name": "Desktop weather",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "desktop-world-clock",
+    "name": "Desktop world clock",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "dock",
+    "name": "Dock",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "drives",
+    "name": "Drives",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "feeds",
+    "name": "Feeds",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "git-repos",
+    "name": "Git repositories",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "hadith",
+    "name": "Hadith",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "home-assistant",
+    "name": "Home Assistant",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "icon-themes",
+    "name": "Icon themes",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "jannah",
+    "name": "Jannah",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "keybinds",
+    "name": "Shortcuts cheatsheet",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "keyboard-layout",
+    "name": "Keyboard layout",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "language",
+    "name": "Language",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "launcher",
+    "name": "Launcher",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "local-ai",
+    "name": "Local AI",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "main-menu",
+    "name": "Main menu",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "media",
+    "name": "Media",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "mini-stats",
+    "name": "Mini stats",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "moon-phase",
+    "name": "Moon phase",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "net-speed",
+    "name": "Network speed",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "network",
+    "name": "Network",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "notes",
+    "name": "Notes",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "notifications",
+    "name": "Notifications",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "phone-connect",
+    "name": "Phone Connect",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "pomodoro",
+    "name": "Pomodoro",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "ports",
+    "name": "Listening ports",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "power",
+    "name": "Power",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "prayer-times",
+    "name": "Prayer times",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "presentation",
+    "name": "Presentation mode",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "privacy",
+    "name": "Privacy",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "processes",
+    "name": "Process hunter",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "progress",
+    "name": "Task progress",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "quick-settings",
+    "name": "Quick settings",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "quran",
+    "name": "Qur'an",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "radio",
+    "name": "Radio",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "reddit",
+    "name": "Reddit",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "resources",
+    "name": "Resources",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "screen-time",
+    "name": "Screen time",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "screenshot",
+    "name": "Screenshot",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "services",
+    "name": "Services",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "session",
+    "name": "Session",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "share",
+    "name": "Share to phone",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "sound-themes",
+    "name": "Sound themes",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "soundscapes",
+    "name": "Soundscapes",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "stash",
+    "name": "Stash",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "sudoku",
+    "name": "Sudoku",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "tailscale",
+    "name": "Tailscale",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "todo",
+    "name": "To-do",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "translator",
+    "name": "Translator",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "tray",
+    "name": "System tray",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "updates",
+    "name": "Updates",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "uptime",
+    "name": "Uptime monitor",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "wallhaven",
+    "name": "Wallhaven",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "wallpaper",
+    "name": "Wallpaper",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "wallpaper-depth",
+    "name": "Wallpaper depth",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "wallpaper-generator",
+    "name": "Wallpaper generator",
+    "description": "",
+    "category": "plugin",
+    "kind": "catalog",
+    "capabilities": []
+  },
+  {
+    "id": "weather",
+    "name": "Weather",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "workspaces",
+    "name": "Workspaces",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  },
+  {
+    "id": "world-clock",
+    "name": "World clock",
+    "description": "",
+    "category": "plugin",
+    "kind": "builtin+catalog",
+    "capabilities": []
+  }
+]

@@ -1,0 +1,14 @@
+[Unit]
+Description=Scy-Shell v2.0 — Native Rust GPUI Companion, AI Agent & WASM Plugin Host
+PartOf=graphical-session.target
+After=scy-daemon.service scy-lucid.service
+Requires=scy-daemon.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/scy-launch-engine mandara
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

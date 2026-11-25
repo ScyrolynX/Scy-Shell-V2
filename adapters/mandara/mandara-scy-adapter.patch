@@ -1,0 +1,275 @@
+diff --git a/crates/mandara-app/src/surfaces.rs b/crates/mandara-app/src/surfaces.rs
+index 95c1fc0..fb58c61 100644
+--- a/crates/mandara-app/src/surfaces.rs
++++ b/crates/mandara-app/src/surfaces.rs
+@@ -46,6 +46,7 @@ pub(super) fn init(outputs: Vec<OutputGeometry>, cx: &mut App) {
+     cx.set_global(Remeasure::default());
+     reconcile(&outputs, true, cx);
+     cx.observe_displays(|_, cx| remeasure(cx)).detach();
++    cx.observe(&mandara_ui::state::config(cx), |_, cx| remeasure(cx)).detach();
+     cx.observe_global::<mandara_ui::wallpaper::LiveRevision>(refresh_wallpaper_layers).detach();
+ }
+ 
+@@ -220,7 +221,8 @@ fn reconcile(outputs: &[OutputGeometry], initial: bool, cx: &mut App) {
+     let live_displays: Vec<_> = cx.displays().iter().map(|display| DisplayKey::of(display.as_ref())).collect();
+     let previous = cx.try_global::<mandara_ui::overlays::Outputs>().map(|outputs| outputs.0.as_slice()).unwrap_or_default();
+     let outputs = preserve_known_outputs(&live_displays, outputs, &existing, previous);
+-    let desired = snapshots(&outputs, &existing, initial, cx);
++    let gates = mandara_ui::state::config(cx).read(cx).get().scy_gates.clone();
++    let desired = if gates.needs_shell_surface() { snapshots(&outputs, &existing, initial, cx) } else { Vec::new() };
+     cx.set_global(mandara_ui::overlays::Outputs(outputs));
+     let mut state = std::mem::take(cx.global_mut::<Surfaces>());
+     let mut kept = Vec::new();
+@@ -266,7 +268,8 @@ fn open(spec: Spec, wallpaper: bool, cx: &mut App) -> Option<SurfaceSet> {
+         }
+     };
+     let strips = mandara_ui::shell::open_exclusion_strips(spec.display, spec.size, spec.monitor.clone(), cx);
+-    let wallpaper = wallpaper.then(|| open_wallpaper(&spec, cx)).flatten();
++    let owns_wall = mandara_ui::state::config(cx).read(cx).get().scy_gates.wallpaper_enabled();
++    let wallpaper = (wallpaper && owns_wall).then(|| open_wallpaper(&spec, cx)).flatten();
+     tracing::info!("mandara shell surface on {} ({w}×{h} logical)", spec.monitor);
+     Some(SurfaceSet { wallpaper_live: mandara_ui::wallpaper::live_on(&spec.monitor), spec, shell, wallpaper, strips })
+ }
+diff --git a/crates/mandara-config/src/lib.rs b/crates/mandara-config/src/lib.rs
+index cacaa4a..27f9ddf 100644
+--- a/crates/mandara-config/src/lib.rs
++++ b/crates/mandara-config/src/lib.rs
+@@ -38,6 +38,7 @@ pub mod preauth;
+ pub mod profiles;
+ pub mod recorder;
+ mod regular;
++pub mod scy_gates;
+ pub mod schema;
+ pub mod side_bars;
+ pub mod side_edges;
+diff --git a/crates/mandara-config/src/looks.rs b/crates/mandara-config/src/looks.rs
+index 902a75d..64d0fda 100644
+--- a/crates/mandara-config/src/looks.rs
++++ b/crates/mandara-config/src/looks.rs
+@@ -296,7 +296,7 @@ const fn plain(layout: BarLayout, position: BarPosition, screen_frame: bool, opa
+     LookBar::Plain { layout, position, screen_frame, opacity, capsules: false, height: None }
+ }
+ 
+-pub const LOOKS: [LookDef; 19] = [
++pub const LOOKS: [LookDef; 20] = [
+     LookDef {
+         id: "corniche-dusk",
+         name: "Corniche Dusk",
+@@ -595,6 +595,20 @@ pub const LOOKS: [LookDef; 19] = [
+         corners: Some([CornerAction::Launcher, CornerAction::Notifications, CornerAction::Overview, CornerAction::Session]),
+         ..KEEP
+     },
++    LookDef {
++        id: "scy-m3-expressive",
++        name: "Scy-Shell · Material 3 Expressive",
++        blurb: "Lucid 2 Material 3 Expressive primary identity: Google Sans, HCT Expressive palette, bouncy Jelly-harmonized springs and soft capsules.",
++        seed: (0.76, 0.14, 355.0),
++        variant: SchemeVariant::Expressive,
++        bar: plain(BarLayout::FloatingPills, BarPosition::Top, false, 0.94),
++        ui_font: "Google Sans",
++        display_font: "Google Sans",
++        radius_scale: 1.25,
++        components: ComponentPreset::Expressive,
++        motion: Some(MotionPreset::Bouncy),
++        ..KEEP
++    },
+ ];
+ 
+ /// The look with `id`.
+diff --git a/crates/mandara-config/src/schema.rs b/crates/mandara-config/src/schema.rs
+index 50a825a..0e5e2f8 100644
+--- a/crates/mandara-config/src/schema.rs
++++ b/crates/mandara-config/src/schema.rs
+@@ -64,6 +64,7 @@ pub mod defaults {
+ #[serde(default)]
+ pub struct ShellConfig {
+     pub general: GeneralConfig,
++    pub scy_gates: crate::scy_gates::ScyGatesConfig,
+     pub appearance: AppearanceConfig,
+     pub theme: ThemeConfig,
+     pub bar: BarConfig,
+diff --git a/crates/mandara-config/src/scy_gates.rs b/crates/mandara-config/src/scy_gates.rs
+new file mode 100644
+index 0000000..71a3c8b
+--- /dev/null
++++ b/crates/mandara-config/src/scy_gates.rs
+@@ -0,0 +1,108 @@
++//! Scy-Shell Unified Core exclusive-resource & dormant-surface gates.
++//!
++//! When `managed_by_scy_shell` is `false` (default when running Mandara
++//! standalone), every `*_enabled()` helper returns `true`, preserving 100%
++//! original Mandara behavior. Under Scy-Shell supervision, `scy-daemon`
++//! populates `[scy_gates]` in `config.toml` so exclusive D-Bus/Wayland
++//! claims and GPU swapchains never collide with active Lucid 2 providers.
++
++use serde::{Deserialize, Serialize};
++
++fn default_true() -> bool { true }
++fn default_lucid() -> String { "lucid".into() }
++
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
++#[serde(default)]
++pub struct ScyGatesConfig {
++    pub managed_by_scy_shell: bool,
++    #[serde(default = "default_true")]
++    pub owns_notifications: bool,
++    #[serde(default = "default_true")]
++    pub owns_polkit: bool,
++    #[serde(default = "default_true")]
++    pub owns_lock: bool,
++    #[serde(default = "default_true")]
++    pub owns_night_light: bool,
++    #[serde(default = "default_true")]
++    pub owns_bt_agent: bool,
++    #[serde(default = "default_true")]
++    pub owns_idle: bool,
++    #[serde(default = "default_true")]
++    pub owns_clipboard: bool,
++    #[serde(default = "default_true")]
++    pub owns_wallpaper: bool,
++    #[serde(default = "default_lucid")]
++    pub bar_mode: String,
++    #[serde(default = "default_lucid")]
++    pub dock_mode: String,
++    #[serde(default = "default_lucid")]
++    pub launcher_mode: String,
++    #[serde(default = "default_lucid")]
++    pub desktop_widgets_mode: String,
++    #[serde(default = "default_lucid")]
++    pub toast_renderer: String,
++    #[serde(default = "default_lucid")]
++    pub osd_renderer: String,
++}
++
++impl Default for ScyGatesConfig {
++    fn default() -> Self {
++        Self {
++            managed_by_scy_shell: false,
++            owns_notifications: true,
++            owns_polkit: true,
++            owns_lock: true,
++            owns_night_light: true,
++            owns_bt_agent: true,
++            owns_idle: true,
++            owns_clipboard: true,
++            owns_wallpaper: true,
++            bar_mode: "mandara".into(),
++            dock_mode: "mandara".into(),
++            launcher_mode: "mandara".into(),
++            desktop_widgets_mode: "mandara".into(),
++            toast_renderer: "mandara".into(),
++            osd_renderer: "mandara".into(),
++        }
++    }
++}
++
++impl ScyGatesConfig {
++    pub fn notifications_enabled(&self) -> bool {
++        !self.managed_by_scy_shell || self.owns_notifications
++    }
++    pub fn polkit_enabled(&self) -> bool {
++        !self.managed_by_scy_shell || self.owns_polkit
++    }
++    pub fn night_light_enabled(&self) -> bool {
++        !self.managed_by_scy_shell || self.owns_night_light
++    }
++    pub fn clipboard_enabled(&self) -> bool {
++        !self.managed_by_scy_shell || self.owns_clipboard
++    }
++    pub fn wallpaper_enabled(&self) -> bool {
++        !self.managed_by_scy_shell || self.owns_wallpaper
++    }
++    pub fn toasts_enabled(&self) -> bool {
++        !self.managed_by_scy_shell || self.toast_renderer == "mandara"
++    }
++    pub fn osd_enabled(&self) -> bool {
++        !self.managed_by_scy_shell || self.osd_renderer == "mandara"
++    }
++    pub fn dock_enabled(&self) -> bool {
++        !self.managed_by_scy_shell || self.dock_mode == "mandara"
++    }
++    /// Dormant Zero-Swapchain check: returns false when Lucid owns all persistent
++    /// layer surfaces, avoiding idle wgpu swapchain allocations until needed.
++    pub fn needs_shell_surface(&self) -> bool {
++        if !self.managed_by_scy_shell {
++            return true;
++        }
++        self.bar_mode != "lucid"
++            || self.dock_mode == "mandara"
++            || self.launcher_mode == "mandara"
++            || self.desktop_widgets_mode != "lucid"
++            || self.toast_renderer == "mandara"
++            || self.osd_renderer == "mandara"
++    }
++}
+diff --git a/crates/mandara-ui/src/hub.rs b/crates/mandara-ui/src/hub.rs
+index d43be1d..e72f643 100644
+--- a/crates/mandara-ui/src/hub.rs
++++ b/crates/mandara-ui/src/hub.rs
+@@ -225,8 +225,9 @@ pub fn init_hub(cx: &mut App) -> Entity<Hub> {
+     let media = mandara_services::spawn_media_service();
+     let network = mandara_services::spawn_network_service();
+     let bluetooth = mandara_services::spawn_bluetooth_service();
++    let scy_gates = crate::state::config(cx).read(cx).get().scy_gates.clone();
+     let audio = mandara_services::spawn_audio_service();
+-    let notifications = mandara_services::spawn_notification_service();
++    let notifications = scy_gates.notifications_enabled().then(mandara_services::spawn_notification_service);
+     let compositor = mandara_compositor::connect();
+ 
+     let hub = cx.new(|_| Hub {
+@@ -234,7 +235,7 @@ pub fn init_hub(cx: &mut App) -> Entity<Hub> {
+         network_service: Some(network.clone()),
+         bluetooth_service: Some(bluetooth.clone()),
+         audio_service: Some(audio.clone()),
+-        notification_service: Some(notifications.clone()),
++        notification_service: notifications.clone(),
+         compositor: compositor.clone(),
+         ..Default::default()
+     });
+@@ -245,7 +246,9 @@ pub fn init_hub(cx: &mut App) -> Entity<Hub> {
+     pump(hub.clone(), network.updates.clone(), Domains::NETWORK, |h, s| set(&mut h.network, s), cx);
+     pump(hub.clone(), bluetooth.updates.clone(), Domains::BLUETOOTH, |h, s| set(&mut h.bluetooth, s), cx);
+     pump(hub.clone(), audio.updates.clone(), Domains::AUDIO, |h, s| set(&mut h.audio, s), cx);
+-    pump(hub.clone(), notifications.updates.clone(), Domains::NOTIFICATIONS, |h, s| set(&mut h.notifications, s), cx);
++    if let Some(notifications) = notifications {
++        pump(hub.clone(), notifications.updates.clone(), Domains::NOTIFICATIONS, |h, s| set(&mut h.notifications, s), cx);
++    }
+     let resources = cx.new(|_| SystemSampler::default());
+     cx.set_global(GlobalResources(resources));
+ 
+@@ -274,13 +277,19 @@ pub fn init_hub(cx: &mut App) -> Entity<Hub> {
+             });
+         }).detach();
+     }
+-    crate::osd::init(&hub, cx);
++    if scy_gates.osd_enabled() {
++        crate::osd::init(&hub, cx);
++    }
+     // Notification popups, privacy monitor, event sounds, auto-DND.
+     crate::alerts::init(cx);
+     crate::plugins::sound_themes::init(cx);
+-    crate::toasts::init(cx);
++    if scy_gates.toasts_enabled() {
++        crate::toasts::init(cx);
++    }
+     crate::update_watch::init(cx);
+-    crate::night_light::init(cx);
++    if scy_gates.night_light_enabled() {
++        crate::night_light::init(cx);
++    }
+     crate::plugins::displays::init(cx);
+     hub
+ }
+diff --git a/crates/mandara-ui/src/plugins/dock/mod.rs b/crates/mandara-ui/src/plugins/dock/mod.rs
+index 0e91565..ebbfc49 100644
+--- a/crates/mandara-ui/src/plugins/dock/mod.rs
++++ b/crates/mandara-ui/src/plugins/dock/mod.rs
+@@ -2243,7 +2243,7 @@ pub fn stays_out_for_launcher(cfg: &DockConfig, launcher_open: bool) -> bool {
+ /// on (Studio, Plugins, `mandara msg dock on`) always visibly works.
+ fn reconcile(cx: &mut App) {
+     let cfg = config(cx).read(cx).snapshot();
+-    let enabled = cx.global::<PluginRegistry>().is_enabled(ID, &cfg.plugins);
++    let enabled = cfg.scy_gates.dock_enabled() && cx.global::<PluginRegistry>().is_enabled(ID, &cfg.plugins);
+     let d = cfg.dock_sanitized();
+     let thickness = surface_thickness(&d);
+     let exclusive = (d.reserve_space && d.auto_hide == DockAutoHide::Never).then(|| d.band().round() as i32);
